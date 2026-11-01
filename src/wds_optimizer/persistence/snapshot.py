@@ -65,10 +65,12 @@ def build_snapshot(
     pipe_velocities: np.ndarray,
     hydraulics_converged: bool,
     config: dict,
+    inp_content: str | None = None,       # NEW
+    d_content: str | None = None,         # NEW
+    cost_content: str | None = None,      # NEW
 ) -> dict:
-    """Serialize the current app state to a JSON-friendly dict."""
-    return {
-        "version": "0.3.0",
+    snapshot = {
+        "version": "0.4.0",
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "environment": {
             "diam_unit": problem_snapshot.get("Units", {}).get(
@@ -77,18 +79,10 @@ def build_snapshot(
             "pmin": problem_snapshot["Pmin"],
             "vmax": problem_snapshot["Vmax"],
         },
-        "config": {
-            "ns":       config.get("ns"),
-            "max_gen":  config.get("max_gen"),
-            "ga_pc":    config.get("ga_pc"),
-            "ga_pm":    config.get("ga_pm"),
-            "ga_sel":   config.get("ga_sel"),
-            "pso_w":    config.get("pso_w"),
-            "pso_c1":   config.get("pso_c1"),
-            "pso_c2":   config.get("pso_c2"),
-            "n_runs":   config.get("n_runs"),
-            "exp_seed": config.get("exp_seed"),
-        },
+        "config": {k: config.get(k) for k in (
+            "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
+            "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
+        )},
         "problem": {
             "pipe_names":     list(problem_snapshot["pipe_names"]),
             "junction_names": list(problem_snapshot["junction_names"]),
@@ -126,6 +120,16 @@ def build_snapshot(
             "converged":       bool(hydraulics_converged),
         },
     }
+
+    # Embed input files so the experiment is fully self-contained.
+    if inp_content is not None:
+        snapshot["inputs"] = {
+            "inp":      inp_content,
+            "D_txt":    d_content,
+            "cost_txt": cost_content,
+        }
+
+    return snapshot
 
 
 def save_snapshot(snapshot: dict, path: str | Path) -> None:
