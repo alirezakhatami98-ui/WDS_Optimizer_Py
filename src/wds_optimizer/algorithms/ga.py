@@ -7,9 +7,27 @@ from .selection import selection_roulette, selection_tournament
 from ..optimization.evaluate import evaluate_population
 from ..optimization.fitness import calculate_fitness
 
+class GACancelled(Exception):
+    """Raised when the GA is cancelled via cancel_callback."""
 
-def run_ga(problem, config):
-    """Run GA and return (score, full_position_m, convergence, feasible)."""
+def run_ga(problem, config,
+           progress_callback=None, cancel_callback=None):
+    """Run GA.
+
+    progress_callback : callable(info_dict) or None
+        Called at selected generations with keys:
+        Algorithm, Generation, MaxGenerations, BestCost, Feasible,
+        Convergence (np.ndarray of length G+1)
+    cancel_callback : callable() -> bool or None
+        If it returns True, raises ``GACancelled``.
+
+    Returns
+    -------
+    score : float
+    full_position : np.ndarray
+    convergence : np.ndarray (length MaxGen)
+    feasible : bool
+    """
     rng = (
         np.random.default_rng(config.Seed)
         if config.Seed is not None
@@ -34,7 +52,14 @@ def run_ga(problem, config):
 
     GlobalSol, GlobalCost, GlobalViol = None, np.inf, np.inf
 
+    ProgressInterval = max(1, MaxGen // 50)
+    ProgressFailed = False
+
     for G in range(MaxGen):
+        # ---- cancellation check ----
+        if cancel_callback is not None and cancel_callback():
+            raise GACancelled("GA execution was cancelled by the user.")
+        
         # ---- selection ----
         if config.GA.Selection == "tournament":
             sel = selection_tournament(
@@ -100,6 +125,21 @@ def run_ga(problem, config):
             GlobalCost, GlobalViol = eCost, eViol
 
         Conv[G] = GlobalCost
+
+        if progress_callback is not None and not ProgressFailed:
+            if (G == 0) or ((G % ProgressInterval) == 0) or (G == MaxGen - 1):
+                try:
+                    progress_callback({
+                        "Algorithm": "GA",
+                        "Generation": G + 1,
+                        "MaxGenerations": MaxGen,
+                        "BestCost": float(Conv[G]),
+                        "Feasible": bool(GlobalViol == 0.0),
+                        "Convergence": Conv[: G + 1].copy(),
+                    })
+                except Exception as e:
+                    print(f"[run_ga] progress_callback error: {e}")
+                    ProgressFailed = True
 
     full_position = problem["InitialD"].copy()
     full_position[problem["VariablePipes"]] = problem["D"][GlobalSol]

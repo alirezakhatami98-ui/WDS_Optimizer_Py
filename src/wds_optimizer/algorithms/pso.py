@@ -5,8 +5,12 @@ import numpy as np
 from .compare import is_better_solution
 from ..optimization.evaluate import evaluate_population
 
+class PSOCancelled(Exception):
+    """Raised when PSO is cancelled."""
 
-def run_pso(problem, config):
+
+def run_pso(problem, config,
+            progress_callback=None, cancel_callback=None):
     """Run PSO and return (score, full_position_m, convergence, feasible)."""
     rng = (
         np.random.default_rng(config.Seed)
@@ -43,7 +47,13 @@ def run_pso(problem, config):
 
     Conv = np.zeros(MaxGen)
 
+    ProgressInterval = max(1, MaxGen // 50)
+    ProgressFailed = False
+
     for G in range(MaxGen):
+        if cancel_callback is not None and cancel_callback():
+            raise PSOCancelled("PSO execution was cancelled by the user.")
+        
         # MATLAB round() is half-away-from-zero; np.floor(x + 0.5) matches.
         X_discrete = np.clip(
             np.floor(X + 0.5).astype(int), 0, ND - 1
@@ -93,6 +103,21 @@ def run_pso(problem, config):
             BestCost, BestViol = GBestCost, GBestViol
 
         Conv[G] = BestCost
+
+        if progress_callback is not None and not ProgressFailed:
+            if (G == 0) or ((G % ProgressInterval) == 0) or (G == MaxGen - 1):
+                try:
+                    progress_callback({
+                        "Algorithm": "PSO",
+                        "Generation": G + 1,
+                        "MaxGenerations": MaxGen,
+                        "BestCost": float(Conv[G]),
+                        "Feasible": bool(BestViol == 0.0),
+                        "Convergence": Conv[: G + 1].copy(),
+                    })
+                except Exception as e:
+                    print(f"[run_pso] progress_callback error: {e}")
+                    ProgressFailed = True
 
     full_position = problem["InitialD"].copy()
     full_position[problem["VariablePipes"]] = problem["D"][BestX]
