@@ -32,6 +32,9 @@ from wds_optimizer.persistence.snapshot import (
 )
 from wds_optimizer.sweep.config import SWEEP_PARAMETERS, parse_sweep_values
 from wds_optimizer.sweep.runner import run_parameter_sweep
+from wds_optimizer.app.compare import (
+    compute_comparison_stats, overall_stats,
+)
 
 # =====================================================================
 #  Page config & cached resources
@@ -208,6 +211,15 @@ def _render_sidebar():
 
         if st.session_state.experiment is not None:
             try:
+                inp_content = Path(st.session_state.inp_path).read_text(
+                    encoding="utf-8", errors="replace"
+                )
+                d_content = Path(st.session_state.d_path).read_text(
+                    encoding="utf-8", errors="replace"
+                )
+                cost_content = Path(st.session_state.cost_path).read_text(
+                    encoding="utf-8", errors="replace"
+                )
                 snap = build_snapshot(
                     problem_snapshot=st.session_state.problem_snapshot,
                     experiment=st.session_state.experiment,
@@ -221,6 +233,9 @@ def _render_sidebar():
                         "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
                         "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
                     )},
+                    inp_content=inp_content,
+                    d_content=d_content,
+                    cost_content=cost_content,
                 )
                 import json as _json
                 st.download_button(
@@ -515,13 +530,36 @@ def _execute_run(algo_label: str):
 
 def _restore_from_snapshot(data: dict):
     """Restore session_state from a loaded snapshot dict."""
+    import uuid
+
     prob = data["problem"]
     env = data["environment"]
     cfg = data["config"]
     best = data["best"]
     hyd = data["hydraulics"]
 
-    # Config
+    # ---- Inputs (embedded in .json as of Phase 4) ----
+    inputs = data.get("inputs")
+    if inputs and inputs.get("inp"):
+        tmpdir = Path(tempfile.gettempdir()) / "wds_optimizer_loaded"
+        tmpdir.mkdir(parents=True, exist_ok=True)
+        uid = uuid.uuid4().hex[:8]
+
+        inp_p = tmpdir / f"{uid}.inp"
+        inp_p.write_text(inputs["inp"], encoding="utf-8")
+        st.session_state.inp_path = str(inp_p)
+
+        if inputs.get("D_txt"):
+            d_p = tmpdir / f"{uid}_D.txt"
+            d_p.write_text(inputs["D_txt"], encoding="utf-8")
+            st.session_state.d_path = str(d_p)
+
+        if inputs.get("cost_txt"):
+            c_p = tmpdir / f"{uid}_Cost.txt"
+            c_p.write_text(inputs["cost_txt"], encoding="utf-8")
+            st.session_state.cost_path = str(c_p)
+
+    # ---- Config ----
     for key in ("ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
                 "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed"):
         if key in cfg and cfg[key] is not None:
@@ -529,7 +567,7 @@ def _restore_from_snapshot(data: dict):
     st.session_state.pmin = env["pmin"]
     st.session_state.vmax = env["vmax"]
 
-    # Problem snapshot
+    # ---- Problem snapshot ----
     st.session_state.problem_snapshot = {
         "pipe_names": prob["pipe_names"],
         "junction_names": prob["junction_names"],
@@ -545,7 +583,7 @@ def _restore_from_snapshot(data: dict):
         "Units": prob["Units"],
     }
 
-    # Experiment
+    # ---- Experiment ----
     st.session_state.experiment = restore_experiment(data)
     st.session_state.best_algo = best["algorithm"]
     st.session_state.best_run_index = best["run_index"]
@@ -711,6 +749,157 @@ def _render_sweep_tab():
         mime="text/csv",
         width="stretch",
     )
+
+def _render_compare_tab():
+    st.subheader("Compare two experiments")
+    col1, col2 = st.columns(2)
+    with col1:
+        file_a = st.file_uploader(
+            "Experiment A (.json)", type=["json"], key="cmp_a"
+        )
+    with col2:
+        file_b = st.file_uploader(
+            "Experiment B (.json)", type=["json"], key="cmp_b"
+        )
+
+    if st.button(
+        "🔄 Compare", type="primary",
+        disabled=not (file_a and file_b),
+        width="stretch",
+    ):
+        try:
+            data_a = load_snapshot(file_a)
+            data_b = load_snapshot(file_b)
+            st.session_state.compare_result = {
+                "a": restore_experiment(data_a),
+                "b": restore_experiment(data_b),
+                "stats_a": compute_comparison_stats(restore_experiment(data_a)),
+                "stats_b": compute_comparison_stats(restore_experiment(data_b)),
+            }
+        except Exception as e:
+            st.error(f"Compare failed: {type(e).__name__}: {e}")
+            return
+
+    result = st.session_state.get("compare_result")
+    if result is None:
+        st.info("Upload two .json experiments and click Compare.")
+        return
+
+    exp_a, exp_b = result["a"], result["b"]
+    stats_a, stats_b = result["stats_a"], result["stats_b"]
+    oa, ob = overall_stats(stats_a), overall_stats(stats_b)
+
+    # ---- Overall comparison ----
+    st.markdown("### Overall")
+    st.dataframe(
+        pd.DataFrame([
+            {
+                "Metric": "Best (feasible)",
+                "A": f"{oa['best']:,.0f}" if np.isfinite(oa["best"]) else "—",
+                "B": f"{ob['best']:,.0f}" if np.isfinite(ob["best"]) else "—",
+                "Delta (B−A)": (
+                    f"{ob['best'] - oa['best']:+,.0f}"
+                    if np.isfinite(oa["best"]) and np.isfinite(ob["best"])
+                    else "—"
+                ),
+            },
+            {
+                "Metric": "Mean (feasible)",
+                "A": f"{oa['mean']:,.0f}" if np.isfinite(oa["mean"]) else "—",
+                "B": f"{ob['mean']:,.0f}" if np.isfinite(ob["mean"]) else "—",
+                "Delta (B−A)": (
+                    f"{ob['mean'] - oa['mean']:+,.0f}"
+                    if np.isfinite(oa["mean"]) and np.isfinite(ob["mean"])
+                    else "—"
+                ),
+            },
+            {
+                "Metric": "Feasible runs",
+                "A": str(oa["n_feasible"]),                       # ← str()
+                "B": str(ob["n_feasible"]),                       # ← str()
+                "Delta (B−A)": f"{ob['n_feasible'] - oa['n_feasible']:+d}",
+            },
+        ]),
+        width="stretch", hide_index=True,
+    )
+
+    # ---- Per-algorithm ----
+    st.markdown("### Per-algorithm")
+    common = sorted(set(stats_a) & set(stats_b))
+    if not common:
+        st.warning("The two experiments do not share any algorithm.")
+    else:
+        rows = []
+        for algo in common:
+            sa, sb = stats_a[algo], stats_b[algo]
+            for metric, key in [("Best", "best"), ("Mean", "mean"), ("Std", "std")]:
+                a, b = sa[key], sb[key]
+                rows.append({
+                    "Algorithm": algo,
+                    "Metric": metric,
+                    "A": f"{a:,.0f}" if np.isfinite(a) else "—",
+                    "B": f"{b:,.0f}" if np.isfinite(b) else "—",
+                    "Delta (B−A)": (
+                        f"{b - a:+,.0f}"
+                        if np.isfinite(a) and np.isfinite(b) else "—"
+                    ),
+                })
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+    # ---- Convergence overlay ----
+    st.markdown("### Convergence")
+    fig = go.Figure()
+    ca = {"GA": "#f59f00", "PSO": "#15aabf"}
+    cb = {"GA": "#d9480f", "PSO": "#1971c2"}
+    for label, exp, colors, dash in [
+        ("A", exp_a, ca, "solid"),
+        ("B", exp_b, cb, "dash"),
+    ]:
+        for algo, runs in exp.runs.items():
+            convs = [
+                r.convergence for r in runs
+                if r.status == "Success" and r.convergence is not None
+            ]
+            if not convs:
+                continue
+            maxlen = max(len(c) for c in convs)
+            padded = np.full((len(convs), maxlen), np.nan)
+            for i, c in enumerate(convs):
+                padded[i, :len(c)] = c
+            fig.add_trace(go.Scatter(
+                x=np.arange(1, maxlen + 1),
+                y=np.nanmean(padded, axis=0),
+                mode="lines",
+                name=f"{label}/{algo}",
+                line=dict(color=colors.get(algo, "gray"),
+                          width=2, dash=dash),
+            ))
+    fig.update_layout(
+        height=400, xaxis_title="Generation",
+        yaxis_title="Best cost",
+        margin=dict(l=20, r=20, t=20, b=20),
+    )
+    st.plotly_chart(fig, width="stretch")
+
+    # ---- Distribution ----
+    st.markdown("### Distribution")
+    fig = go.Figure()
+    for label, exp, colors in [("A", exp_a, ca), ("B", exp_b, cb)]:
+        for algo, runs in exp.runs.items():
+            cs = [
+                r.score for r in runs
+                if r.status == "Success" and r.feasible
+            ]
+            if cs:
+                fig.add_trace(go.Box(
+                    y=cs, name=f"{label}/{algo}",
+                    marker_color=colors.get(algo, "gray"),
+                ))
+    fig.update_layout(
+        height=350, yaxis_title="Cost", showlegend=False,
+        margin=dict(l=20, r=20, t=20, b=20),
+    )
+    st.plotly_chart(fig, width="stretch")
 
 def _pick_best_run(result: ExperimentResult):
     """Select the best successful run (feasible first, then cost)."""
@@ -1107,6 +1296,7 @@ def main():
         "🗺 Network Map",
         "📋 All Runs",
         "🔍 Sweep",
+        "🔄 Compare",
     ])
     with tabs[0]:
         _render_summary_tab()
@@ -1120,6 +1310,8 @@ def main():
         _render_all_runs_tab()
     with tabs[5]:
         _render_sweep_tab()
+    with tabs[6]:
+        _render_compare_tab()
 
 
 if __name__ == "__main__":
