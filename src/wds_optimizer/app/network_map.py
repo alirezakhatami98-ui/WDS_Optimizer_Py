@@ -134,6 +134,32 @@ def build_network_figure(wn, mode="preview",
         name="Reservoir/Tank",
     ))
 
+    # ---- Colorbar for pipe-based colorings (velocity, diameter) ----
+    # Per-pipe traces use discrete line colors, so Plotly does not build
+    # a colorbar automatically. This invisible marker trace only exists
+    # to trigger the colorbar (size≈0, opacity=0).
+    if colorscale is not None and mode in ("velocity", "diameter"):
+        ref_x = res_x[0] if res_x else (junc_x[0] if junc_x else 0.0)
+        ref_y = res_y[0] if res_y else (junc_y[0] if junc_y else 0.0)
+        fig.add_trace(go.Scatter(
+            x=[ref_x, ref_x],
+            y=[ref_y, ref_y],
+            mode="markers",
+            marker=dict(
+                colorscale=colorscale,
+                cmin=cmin,
+                cmax=cmax,
+                color=[cmin, cmax],
+                showscale=True,
+                colorbar=dict(title=cbar_title),
+                size=1,
+                opacity=0,
+                line=dict(width=0),
+            ),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+
     # ---- Layout ----
     fig.update_layout(
         height=550,
