@@ -18,6 +18,7 @@ _KEYS = {
     "node_pressures": None, "pipe_velocities": None,
     "hydraulics_converged": False,
     "problem_snapshot": None,
+    "sweep_result":  None,
 }
 
 
@@ -32,6 +33,6 @@ def reset_experiment():
         "experiment", "best_algo", "best_run_index",
         "best_position_m", "best_score", "best_feasible",
         "node_pressures", "pipe_velocities",
-        "hydraulics_converged", "problem_snapshot",
+        "hydraulics_converged", "problem_snapshot", "sweep_result",
     ):
         st.session_state[key] = _KEYS[key]
