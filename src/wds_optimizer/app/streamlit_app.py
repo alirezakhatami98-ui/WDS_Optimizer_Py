@@ -27,6 +27,11 @@ from wds_optimizer.hydraulics.units import detect_network_units
 from wds_optimizer.optimization.problem import build_optimization_problem
 from wds_optimizer.app.network_map import build_network_figure
 from wds_optimizer.app.state import init_state, reset_experiment
+from wds_optimizer.persistence.snapshot import (
+    build_snapshot, load_snapshot, restore_experiment,
+)
+from wds_optimizer.sweep.config import SWEEP_PARAMETERS, parse_sweep_values
+from wds_optimizer.sweep.runner import run_parameter_sweep
 
 # =====================================================================
 #  Page config & cached resources
@@ -197,7 +202,100 @@ def _render_sidebar():
                 reset_experiment()
                 st.rerun()
 
-    return run_clicked, algo
+        # ---- 5. Save / Load ----
+        st.divider()
+        st.header("5. Save / Load")
+
+        if st.session_state.experiment is not None:
+            try:
+                snap = build_snapshot(
+                    problem_snapshot=st.session_state.problem_snapshot,
+                    experiment=st.session_state.experiment,
+                    best_algo=st.session_state.best_algo,
+                    best_run_index=st.session_state.best_run_index,
+                    best_position_m=st.session_state.best_position_m,
+                    node_pressures=st.session_state.node_pressures,
+                    pipe_velocities=st.session_state.pipe_velocities,
+                    hydraulics_converged=st.session_state.hydraulics_converged,
+                    config={k: st.session_state[k] for k in (
+                        "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
+                        "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
+                    )},
+                )
+                import json as _json
+                st.download_button(
+                    "💾 Save experiment (.json)",
+                    data=_json.dumps(snap, indent=2, ensure_ascii=False)
+                          .encode("utf-8"),
+                    file_name=f"wds_experiment_{datetime.now():%Y%m%d_%H%M%S}.json",
+                    mime="application/json",
+                    width="stretch",
+                )
+            except Exception as e:
+                st.caption(f"Cannot save: {e}")
+
+        load_upload = st.file_uploader(
+            "Load experiment (.json)", type=["json"], key="load_json"
+        )
+        if load_upload is not None:
+            if st.button("Load selected file", width="stretch"):
+                try:
+                    data = load_snapshot(load_upload)
+                    _restore_from_snapshot(data)
+                    st.success("Loaded.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Load failed: {e}")
+
+        # ---- 6. Sweep ----
+        st.divider()
+        st.header("6. Parameter Sweep")
+
+        with st.expander("Configure sweep", expanded=False):
+            sweep_param = st.selectbox(
+                "Parameter",
+                list(SWEEP_PARAMETERS.keys()),
+                format_func=lambda k: SWEEP_PARAMETERS[k],
+                key="sweep_param_input",
+            )
+            sweep_vals_str = st.text_input(
+                "Values (comma-separated)", value="",
+                key="sweep_vals_input",
+                placeholder="e.g. 0.6, 0.7, 0.8, 0.9",
+            )
+            sweep_algo = st.multiselect(
+                "Algorithms", ["GA", "PSO"], default=["GA"],
+                key="sweep_algo_input",
+            )
+            sweep_runs = st.number_input(
+                "Runs per point", 1, 20, value=1, step=1,
+                key="sweep_runs_input",
+            )
+            sweep_go = st.button(
+                "🔍 Run sweep", type="secondary", width="stretch",
+                disabled=not st.session_state.inp_path,
+            )
+
+        sweep_config = None
+        if sweep_go:
+            try:
+                vals = parse_sweep_values(sweep_vals_str)
+                if not sweep_algo:
+                    raise ValueError("Select at least one algorithm.")
+                sweep_config = {
+                    "param_name": sweep_param,
+                    "values": vals,
+                    "algorithms": sweep_algo,
+                    "n_runs": int(sweep_runs),
+                }
+            except ValueError as e:
+                st.error(f"Invalid sweep config: {e}")
+
+    return {
+        "run_clicked": run_clicked,
+        "algo_label": algo,         # ← درست: algo همان مقدار st.radio است
+        "sweep": sweep_config,
+    }
 
 
 # =====================================================================
@@ -415,6 +513,204 @@ def _execute_run(algo_label: str):
 
     st.rerun()
 
+def _restore_from_snapshot(data: dict):
+    """Restore session_state from a loaded snapshot dict."""
+    prob = data["problem"]
+    env = data["environment"]
+    cfg = data["config"]
+    best = data["best"]
+    hyd = data["hydraulics"]
+
+    # Config
+    for key in ("ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
+                "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed"):
+        if key in cfg and cfg[key] is not None:
+            st.session_state[key] = cfg[key]
+    st.session_state.pmin = env["pmin"]
+    st.session_state.vmax = env["vmax"]
+
+    # Problem snapshot
+    st.session_state.problem_snapshot = {
+        "pipe_names": prob["pipe_names"],
+        "junction_names": prob["junction_names"],
+        "L": np.array(prob["L"]),
+        "initial_D": np.array(prob["initial_D"]),
+        "D_m": np.array(prob["D_m"]),
+        "Din": np.array(prob["Din"]),
+        "Cost": np.array(prob["Cost"]),
+        "VariablePipes": np.array(prob["VariablePipes"]),
+        "FixedPipes": np.array(prob["FixedPipes"]),
+        "Pmin": prob["Pmin"],
+        "Vmax": prob["Vmax"],
+        "Units": prob["Units"],
+    }
+
+    # Experiment
+    st.session_state.experiment = restore_experiment(data)
+    st.session_state.best_algo = best["algorithm"]
+    st.session_state.best_run_index = best["run_index"]
+    st.session_state.best_position_m = np.array(best["position"])
+    st.session_state.node_pressures = np.array(hyd["node_pressures"])
+    st.session_state.pipe_velocities = np.array(hyd["pipe_velocities"])
+    st.session_state.hydraulics_converged = hyd["converged"]
+
+    best_run = data["experiment"]["runs"][best["algorithm"]][best["run_index"] - 1]
+    st.session_state.best_feasible = bool(best_run["feasible"])
+    st.session_state.best_score = (
+        float(best_run["score"]) if best_run["score"] is not None
+        else float("inf")
+    )
+
+def _execute_sweep(param_name, values, algorithms, n_runs):
+    # Sync sidebar widgets
+    def _sync(dst, src):
+        if src in st.session_state:
+            st.session_state[dst] = st.session_state[src]
+    _sync("ns",          "ns_input")
+    _sync("max_gen",     "max_gen_input")
+    _sync("pmin",        "pmin_input")
+    _sync("vmax",        "vmax_input")
+    _sync("fixed_pipes", "fixed_pipes_input")
+    _sync("exp_seed",    "exp_seed_input")
+    _sync("ga_pc",       "ga_pc_input")
+    _sync("ga_pm",       "ga_pm_input")
+    _sync("ga_sel",      "ga_sel_input")
+    _sync("pso_w",       "pso_w_input")
+    _sync("pso_c1",      "pso_c1_input")
+    _sync("pso_c2",      "pso_c2_input")
+
+    with st.status(
+        f"Sweeping {SWEEP_PARAMETERS.get(param_name, param_name)}...",
+        expanded=True,
+    ) as status:
+        problem, units, wn = _prepare_problem()
+        base_cfg = build_algorithm_config(
+            int(st.session_state.ns), int(st.session_state.max_gen)
+        )
+        base_cfg.GA.Pc = st.session_state.ga_pc
+        base_cfg.GA.Pm = st.session_state.ga_pm
+        base_cfg.GA.Selection = st.session_state.ga_sel
+        base_cfg.PSO.w = st.session_state.pso_w
+        base_cfg.PSO.c1 = st.session_state.pso_c1
+        base_cfg.PSO.c2 = st.session_state.pso_c2
+
+        st.write(
+            f"Sweeping **{SWEEP_PARAMETERS.get(param_name, param_name)}** "
+            f"over **{len(values)}** values: `{values}`"
+        )
+        st.write(
+            f"Algorithms: **{', '.join(algorithms)}**, "
+            f"runs/point: **{n_runs}**, seed: **{st.session_state.exp_seed}**"
+        )
+        status.update(label="Running sweep...", state="running")
+
+        progress_bar = st.progress(0.0)
+        point_line = st.empty()
+
+        def cb(info):
+            phase = info.get("Phase")
+            if phase == "StartingPoint":
+                point_line.info(
+                    f"Point **{info['PointIndex']}/{info['TotalPoints']}** "
+                    f"| {param_name} = **{info['ParameterValue']:g}**"
+                )
+            elif phase == "RunProgress":
+                pi = info["ProgressInfo"]
+                frac = (
+                    (info["PointIndex"] - 1)
+                    + pi["Generation"] / pi["MaxGenerations"]
+                ) / info["TotalPoints"]
+                progress_bar.progress(min(1.0, frac))
+            elif phase == "PointDone":
+                progress_bar.progress(
+                    info["PointIndex"] / info["TotalPoints"]
+                )
+
+        result = run_parameter_sweep(
+            problem, base_cfg,
+            parameter_name=param_name,
+            values=values,
+            algorithms=algorithms,
+            n_runs=int(n_runs),
+            experiment_seed=int(st.session_state.exp_seed),
+            progress_callback=cb,
+        )
+        st.session_state.sweep_result = result
+        status.update(label="Sweep complete", state="complete")
+
+    st.rerun()
+
+def _render_sweep_tab():
+    result = st.session_state.get("sweep_result")
+    if result is None:
+        st.info("Configure and run a sweep from the sidebar (section 6).")
+        return
+
+    st.subheader(
+        f"Sweep: {SWEEP_PARAMETERS.get(result.parameter, result.parameter)}"
+    )
+    st.caption(
+        f"Algorithms: {', '.join(result.algorithms)} | "
+        f"runs/point: {result.n_runs} | seed: {result.experiment_seed}"
+    )
+
+    rows = []
+    for p in result.points:
+        rows.append({
+            "Value":          f"{p.value:g}",
+            "Status":         p.status,
+            "Best (feasible)": (
+                f"{p.best_score:,.0f}" if np.isfinite(p.best_score) else "—"
+            ),
+            "Mean cost": (
+                f"{p.mean_score:,.0f}" if np.isfinite(p.mean_score) else "—"
+            ),
+            "Std":            f"{p.std_score:,.0f}",
+            "Feasible %":     f"{p.feasible_pct:.0f}%",
+            "Mean time (s)":  f"{p.mean_time:.1f}",
+        })
+    df = pd.DataFrame(rows)
+    st.dataframe(df, width="stretch", hide_index=True)
+
+    # Trend chart
+    xs = [p.value for p in result.points]
+    ys = [
+        p.mean_score if np.isfinite(p.mean_score) else np.nan
+        for p in result.points
+    ]
+    bests = [
+        p.best_score if np.isfinite(p.best_score) else np.nan
+        for p in result.points
+    ]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="lines+markers",
+        name="Mean cost", line=dict(color="#1971c2", width=2),
+    ))
+    fig.add_trace(go.Scatter(
+        x=xs, y=bests, mode="lines+markers",
+        name="Best cost", line=dict(color="#d9480f", width=2, dash="dash"),
+    ))
+    fig.update_layout(
+        height=380,
+        xaxis_title=SWEEP_PARAMETERS.get(result.parameter, result.parameter),
+        yaxis_title="Cost",
+        margin=dict(l=20, r=20, t=20, b=20),
+    )
+    st.plotly_chart(fig, width="stretch")
+
+    # CSV export
+    csv = df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "⬇ Download sweep (CSV)",
+        data=csv,
+        file_name=(
+            f"wds_sweep_{result.parameter}_"
+            f"{datetime.now():%Y%m%d_%H%M%S}.csv"
+        ),
+        mime="text/csv",
+        width="stretch",
+    )
 
 def _pick_best_run(result: ExperimentResult):
     """Select the best successful run (feasible first, then cost)."""
@@ -727,12 +1023,16 @@ def _render_all_runs_tab():
     st.subheader("Export")
     c1, c2 = st.columns(2)
     with c1:
-        csv = df.to_csv(index=False).encode("utf-8")
+        # ASCII-safe + BOM for Excel compatibility
+        df_csv = df.copy()
+        df_csv["Feasible"] = df_csv["Feasible"].map({"✓": "Yes", "✗": "No"})
+        csv = df_csv.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
             "⬇ Download runs (CSV)",
             data=csv,
             file_name=f"wds_runs_{datetime.now():%Y%m%d_%H%M%S}.csv",
             mime="text/csv",
+            width="stretch",
         )
     with c2:
         xlsx = _build_excel_export(result)
@@ -745,6 +1045,7 @@ def _render_all_runs_tab():
                     "application/vnd.openxmlformats-officedocument."
                     "spreadsheetml.sheet"
                 ),
+                width="stretch",
             )
 
 
@@ -783,13 +1084,20 @@ def main():
     init_state()
     _header()
 
-    run_clicked, algo_label = _render_sidebar()
+    actions = _render_sidebar()
 
-    if run_clicked:
+    if actions["run_clicked"]:
         try:
-            _execute_run(algo_label)
+            _execute_run(actions["algo_label"])
         except Exception as e:
             st.error(f"Experiment failed: {type(e).__name__}: {e}")
+            st.exception(e)
+
+    if actions["sweep"] is not None:
+        try:
+            _execute_sweep(**actions["sweep"])
+        except Exception as e:
+            st.error(f"Sweep failed: {type(e).__name__}: {e}")
             st.exception(e)
 
     tabs = st.tabs([
@@ -798,6 +1106,7 @@ def main():
         "💧 Hydraulics",
         "🗺 Network Map",
         "📋 All Runs",
+        "🔍 Sweep",
     ])
     with tabs[0]:
         _render_summary_tab()
@@ -809,6 +1118,8 @@ def main():
         _render_map_tab()
     with tabs[4]:
         _render_all_runs_tab()
+    with tabs[5]:
+        _render_sweep_tab()
 
 
 if __name__ == "__main__":
