@@ -1,7 +1,7 @@
 """WDS Optimizer desktop launcher.
 
-When frozen (PyInstaller), runs the bundled Streamlit app; when run as
-a script, behaves like `streamlit run src/wds_optimizer/app/streamlit_app.py`.
+Frozen (PyInstaller) -> runs bundled Streamlit app + auto-opens browser.
+Script mode          -> same behavior, useful for `python launcher.py`.
 """
 
 from __future__ import annotations
@@ -9,6 +9,9 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
+import time
+import webbrowser
 from pathlib import Path
 
 
@@ -33,16 +36,8 @@ def _bundled_app_path() -> Path:
 
 
 def _write_streamlit_config(st_home: Path) -> None:
-    """Write a config.toml that disables developmentMode.
-
-    Streamlit is bundled with PyInstaller in a way that makes it *think*
-    it is running in development mode, which then rejects any argv-based
-    ``--server.port``.  Putting all options in a config.toml (and using
-    no port-related argv flags) avoids the conflict.
-    """
     st_home.mkdir(parents=True, exist_ok=True)
-    cfg = st_home / "config.toml"
-    cfg.write_text(
+    (st_home / "config.toml").write_text(
         "[global]\n"
         "developmentMode = false\n"
         "\n"
@@ -61,6 +56,23 @@ def _write_streamlit_config(st_home: Path) -> None:
     )
 
 
+def _open_browser_when_ready(url: str, timeout_s: float = 30.0) -> None:
+    """Poll TCP until Streamlit port is open, then open browser."""
+    import socket
+
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", 8501), timeout=1.0):
+                webbrowser.open(url, new=2)
+                return
+        except OSError:
+            time.sleep(0.5)
+    # Fallback: open anyway after timeout (may show connection error
+    # but user can refresh once Streamlit finishes booting).
+    webbrowser.open(url, new=2)
+
+
 def main() -> None:
     # ---- Silence the benign WinError 10054 traceback ----
     import logging
@@ -75,7 +87,7 @@ def main() -> None:
 
     logging.getLogger("asyncio").addFilter(_SuppressWinError10054())
 
-    # ---- Streamlit environment (no port-related argv flags!) ----
+    # ---- Streamlit config ----
     st_home = Path(tempfile.gettempdir()) / "wds_optimizer_streamlit"
     _write_streamlit_config(st_home)
 
@@ -86,15 +98,17 @@ def main() -> None:
     os.environ["STREAMLIT_SERVER_ADDRESS"] = "localhost"
     os.environ["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
 
-    # ---- Run Streamlit ----
+    # ---- Auto-open browser in background ----
+    threading.Thread(
+        target=_open_browser_when_ready,
+        args=("http://localhost:8501",),
+        daemon=True,
+    ).start()
+
+    # ---- Run Streamlit (no argv port flags — see config.toml) ----
     from streamlit.web import cli as stcli
 
-    app_path = str(_bundled_app_path())
-
-    # IMPORTANT: do NOT pass --server.port / --server.address here.
-    # They are already set via config.toml + environment variables.
-    # Passing them as argv triggers the dev-mode conflict again.
-    sys.argv = ["streamlit", "run", app_path]
+    sys.argv = ["streamlit", "run", str(_bundled_app_path())]
     sys.exit(stcli.main())
 
 
