@@ -41,4 +41,4 @@ jobs:
         with:
           files: WDS_Optimizer_windows_x64.zip
           generate_release_notes: true
-          draft: false
+          draft: false 
