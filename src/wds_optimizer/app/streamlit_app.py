@@ -2,6 +2,28 @@
 
 from __future__ import annotations
 
+# ---------------------------------------------------------------------
+# Suppress a benign Windows-only asyncio warning that fires after a
+# download completes:
+#     ConnectionResetError: [WinError 10054] ...
+#     File ".../asyncio/proactor_events.py", line 165, in _call_connection_lost
+# The file downloads successfully; the browser closes the TCP socket a
+# moment before ProactorEventLoop tries to shut it down, and asyncio
+# logs the resulting error.  Filtering it keeps the console clean.
+# ---------------------------------------------------------------------
+import logging
+
+class _SuppressWinError10054(logging.Filter):
+    def filter(self, record):
+        if record.exc_info and record.exc_info[0] is ConnectionResetError:
+            return False
+        if "WinError 10054" in record.getMessage():
+            return False
+        return True
+
+logging.getLogger("asyncio").addFilter(_SuppressWinError10054())
+
+
 import io
 import tempfile
 import time
@@ -35,6 +57,7 @@ from wds_optimizer.sweep.runner import run_parameter_sweep
 from wds_optimizer.app.compare import (
     compute_comparison_stats, overall_stats,
 )
+from wds_optimizer.reporting.report import build_report_zip
 
 # =====================================================================
 #  Page config & cached resources
@@ -306,6 +329,50 @@ def _render_sidebar():
             except ValueError as e:
                 st.error(f"Invalid sweep config: {e}")
 
+        # ---- 7. Reproducibility Report ----
+        st.divider()
+        st.header("7. Reproducibility Report")
+        if st.session_state.experiment is not None:
+            if st.button("📄 Generate report (.zip)", width="stretch"):
+                with st.spinner("Building report (figures, data, JSON)..."):
+                    try:
+                        zip_bytes = build_report_zip(
+                            inp_path=st.session_state.inp_path,
+                            d_path=st.session_state.d_path,
+                            cost_path=st.session_state.cost_path,
+                            problem_snapshot=st.session_state.problem_snapshot,
+                            experiment=st.session_state.experiment,
+                            best_algo=st.session_state.best_algo,
+                            best_run_index=st.session_state.best_run_index,
+                            best_position_m=st.session_state.best_position_m,
+                            node_pressures=st.session_state.node_pressures,
+                            pipe_velocities=st.session_state.pipe_velocities,
+                            hydraulics_converged=st.session_state.hydraulics_converged,
+                            config={k: st.session_state[k] for k in (
+                                "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
+                                "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
+                            )},
+                        )
+                        st.session_state.report_zip = zip_bytes
+                        st.session_state.report_filename = (
+                            f"wds_report_{datetime.now():%Y%m%d_%H%M%S}.zip"
+                        )
+                        st.success("Report ready — download below.")
+                    except Exception as e:
+                        st.error(f"Report failed: {type(e).__name__}: {e}")
+
+            if st.session_state.get("report_zip"):
+                st.download_button(
+                    "⬇ Download report (.zip)",
+                    data=st.session_state.report_zip,
+                    file_name=st.session_state.report_filename,
+                    mime="application/zip",
+                    width="stretch",
+                    key="report_download",
+                )
+        else:
+            st.caption("Run an experiment first.")
+
     return {
         "run_clicked": run_clicked,
         "algo_label": algo,         # ← درست: algo همان مقدار st.radio است
@@ -399,6 +466,10 @@ def _execute_run(algo_label: str):
     _sync("pso_w",       "pso_w_input")
     _sync("pso_c1",      "pso_c1_input")
     _sync("pso_c2",      "pso_c2_input")
+
+    # Clear any stale report from a previous experiment
+    st.session_state.report_zip = None
+    st.session_state.report_filename = None
 
     with st.status("Preparing problem...", expanded=True) as status:
         problem, units, wn = _prepare_problem()
