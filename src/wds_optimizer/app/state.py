@@ -20,6 +20,8 @@ _KEYS = {
     "problem_snapshot": None,
     "sweep_result":  None,
     "compare_result": None,
+    "report_zip":      None,
+    "report_filename": None,
 }
 
 
@@ -34,6 +36,7 @@ def reset_experiment():
         "experiment", "best_algo", "best_run_index",
         "best_position_m", "best_score", "best_feasible",
         "node_pressures", "pipe_velocities",
-        "hydraulics_converged", "problem_snapshot", "sweep_result", "compare_result",
+        "hydraulics_converged", "problem_snapshot", "sweep_result",
+        "report_zip", "report_filename",
     ):
         st.session_state[key] = _KEYS[key]
