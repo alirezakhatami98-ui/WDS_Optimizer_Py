@@ -46,6 +46,12 @@ from wds_optimizer.experiments.runner import (
 )
 from wds_optimizer.hydraulics.simulation import run_hydraulic_simulation
 from wds_optimizer.hydraulics.units import detect_network_units
+from wds_optimizer.hydraulics.units import (
+    detect_network_units,
+    pressure_from_si, pressure_to_si,
+    velocity_from_si, velocity_to_si,
+    diameter_to_display,
+)
 from wds_optimizer.optimization.problem import build_optimization_problem
 from wds_optimizer.app.network_map import build_network_figure
 from wds_optimizer.app.state import init_state, reset_experiment
@@ -87,6 +93,12 @@ def _read_uploaded(uploaded_bytes: bytes, name: str) -> str:
     p.write_bytes(uploaded_bytes)
     return str(p)
 
+@st.cache_data(show_spinner=False)
+def _get_network_units(inp_path: str):
+    """Detect (and cache) the unit system of an .inp file."""
+    import wntr
+    wn = wntr.network.WaterNetworkModel(inp_path)
+    return detect_network_units(wn)
 
 # =====================================================================
 #  UI helpers
@@ -99,8 +111,45 @@ def _header():
         "powered by WNTR/EPANET. Python port of the MATLAB toolkit."
     )
 
+def _init_widget_state():
+    """Initialize widget keys + apply any pending restore.
+
+    Streamlit forbids modifying a widget's session_state key after the
+    widget was created in the same render pass. The Load button runs at
+    the bottom of the sidebar (after all widgets are created), so it
+    cannot set widget keys directly. Instead it queues changes in
+    ``_pending_restore`` and calls ``st.rerun()``. This function applies
+    them at the top of the next pass, *before* the widgets are created.
+    """
+    # Apply any queued restore first (before widgets are instantiated).
+    pending = st.session_state.pop("_pending_restore", None)
+    if pending:
+        for k, v in pending.items():
+            st.session_state[k] = v
+
+    # Seed defaults for keys that still don't exist.
+    defaults = {
+        "ns_input":          int(st.session_state.get("ns", 50)),
+        "max_gen_input":     int(st.session_state.get("max_gen", 100)),
+        "pmin_input":        float(st.session_state.get("pmin", 30.0)),
+        "vmax_input":        float(st.session_state.get("vmax", 2.5)),
+        "fixed_pipes_input": st.session_state.get("fixed_pipes", ""),
+        "ga_pc_input":       float(st.session_state.get("ga_pc", 0.8)),
+        "ga_pm_input":       float(st.session_state.get("ga_pm", 0.03)),
+        "ga_sel_input":      st.session_state.get("ga_sel", "tournament"),
+        "pso_w_input":       float(st.session_state.get("pso_w", 0.7)),
+        "pso_c1_input":      float(st.session_state.get("pso_c1", 1.5)),
+        "pso_c2_input":      float(st.session_state.get("pso_c2", 1.5)),
+        "n_runs_input":      int(st.session_state.get("n_runs", 3)),
+        "exp_seed_input":    int(st.session_state.get("exp_seed", 1)),
+        "algo_input":        "GA",
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
 def _render_sidebar():
+    _init_widget_state()          # ← این خط اضافه شود
     with st.sidebar:
         st.header("1. Input Files")
 
@@ -133,85 +182,106 @@ def _render_sidebar():
 
         st.divider()
         st.header("2. Hydraulics & Constraints")
+
+        units = None
+        if st.session_state.inp_path:
+            try:
+                units = _get_network_units(st.session_state.inp_path)
+            except Exception:
+                units = None
+        st.session_state.network_units = units
+
+        # Auto-convert Pmin/Vmax when the unit system changes.
+        # Both canonical keys and widget keys are updated; widgets below
+        # are rendered with `key=` only (no `value=`), so this is safe.
+        prev = st.session_state.get("network_units_prev")
+        if units is not None and prev is not None:
+            if prev.get("System") != units.get("System"):
+                st.session_state.pmin = pressure_from_si(
+                    pressure_to_si(st.session_state.pmin, prev), units
+                )
+                st.session_state.vmax = velocity_from_si(
+                    velocity_to_si(st.session_state.vmax, prev), units
+                )
+                st.session_state.pmin_input = float(st.session_state.pmin)
+                st.session_state.vmax_input = float(st.session_state.vmax)
+                st.info(
+                    f"Pressure and velocity values converted to "
+                    f"{units['System']} units "
+                    f"({units['PressureUnit']}, {units['VelocityUnit']})."
+                )
+        st.session_state.network_units_prev = units
+
+        p_label = (
+            f"Min pressure ({units['PressureUnit']})" if units
+            else "Min pressure (m)"
+        )
+        v_label = (
+            f"Max velocity ({units['VelocityUnit']})" if units
+            else "Max velocity (m/s)"
+        )
+        if units and units["System"] == "US":
+            st.caption(
+                f"Network uses US customary units: "
+                f"pressure in {units['PressureUnit']}, "
+                f"velocity in {units['VelocityUnit']}."
+            )
+
         st.number_input(
-            "Population / Swarm size (NS)", min_value=4, max_value=500,
-            step=1, key="ns_input",
-            value=int(st.session_state.get("ns", 50)),
+            "Population / Swarm size (NS)",
+            min_value=4, max_value=500, step=1,
+            key="ns_input",
         )
         st.number_input(
-            "Max generations / iterations", min_value=5, max_value=5000,
-            step=1, key="max_gen_input",
-            value=int(st.session_state.get("max_gen", 100)),
+            "Max generations / iterations",
+            min_value=5, max_value=5000, step=1,
+            key="max_gen_input",
         )
         st.number_input(
-            "Min pressure (m)", min_value=0.0, step=1.0,
+            p_label, min_value=0.0, step=1.0,
             key="pmin_input",
-            value=float(st.session_state.get("pmin", 30.0)),
         )
         st.number_input(
-            "Max velocity (m/s)", min_value=0.1, step=0.1,
+            v_label, min_value=0.1, step=0.1,
             key="vmax_input",
-            value=float(st.session_state.get("vmax", 2.5)),
         )
         st.text_input(
             "Fixed pipe IDs (e.g. '1, 3')",
             key="fixed_pipes_input",
-            value=st.session_state.get("fixed_pipes", ""),
         )
 
         st.divider()
         st.header("3. Algorithm")
+        # Algorithm
         algo = st.radio(
             "Algorithm", ["GA", "PSO", "Both"],
-            index=0, key="algo_input", horizontal=True,
+            key="algo_input", horizontal=True,
         )
+
         if algo in ("GA", "Both"):
             with st.expander("GA parameters", expanded=True):
-                st.number_input(
-                    "Pc (crossover)", 0.0, 1.0, step=0.05,
-                    key="ga_pc_input",
-                    value=float(st.session_state.get("ga_pc", 0.8)),
-                )
-                st.number_input(
-                    "Pm (mutation)", 0.0, 1.0, step=0.01,
-                    key="ga_pm_input",
-                    value=float(st.session_state.get("ga_pm", 0.03)),
-                )
-                st.selectbox(
-                    "Selection",
-                    ["tournament", "roulette"], index=0,
-                    key="ga_sel_input",
-                )
+                st.number_input("Pc (crossover)", 0.0, 1.0, step=0.05,
+                                key="ga_pc_input")
+                st.number_input("Pm (mutation)", 0.0, 1.0, step=0.01,
+                                key="ga_pm_input")
+                st.selectbox("Selection", ["tournament", "roulette"],
+                             key="ga_sel_input")
+
         if algo in ("PSO", "Both"):
             with st.expander("PSO parameters", expanded=True):
-                st.number_input(
-                    "w (inertia)", 0.0, 2.0, step=0.05,
-                    key="pso_w_input",
-                    value=float(st.session_state.get("pso_w", 0.7)),
-                )
-                st.number_input(
-                    "c1 (cognitive)", 0.0, 3.0, step=0.1,
-                    key="pso_c1_input",
-                    value=float(st.session_state.get("pso_c1", 1.5)),
-                )
-                st.number_input(
-                    "c2 (social)", 0.0, 3.0, step=0.1,
-                    key="pso_c2_input",
-                    value=float(st.session_state.get("pso_c2", 1.5)),
-                )
+                st.number_input("w (inertia)", 0.0, 2.0, step=0.05,
+                                key="pso_w_input")
+                st.number_input("c1 (cognitive)", 0.0, 3.0, step=0.1,
+                                key="pso_c1_input")
+                st.number_input("c2 (social)", 0.0, 3.0, step=0.1,
+                                key="pso_c2_input")
 
         st.divider()
         st.header("4. Experiment")
-        st.number_input(
-            "Runs per algorithm", min_value=1, max_value=50, step=1,
-            key="n_runs_input",
-            value=int(st.session_state.get("n_runs", 3)),
-        )
-        st.number_input(
-            "Experiment seed", min_value=0, max_value=2**31 - 1, step=1,
-            key="exp_seed_input",
-            value=int(st.session_state.get("exp_seed", 1)),
-        )
+        st.number_input("Runs per algorithm", min_value=1, max_value=50,
+                        step=1, key="n_runs_input")
+        st.number_input("Experiment seed", min_value=0,
+                        max_value=2**31 - 1, step=1, key="exp_seed_input")
 
         st.divider()
         can_run = bool(st.session_state.inp_path)
@@ -279,9 +349,7 @@ def _render_sidebar():
             if st.button("Load selected file", width="stretch"):
                 try:
                     data = load_snapshot(load_upload)
-                    _restore_from_snapshot(data)
-                    st.success("Loaded.")
-                    st.rerun()
+                    _restore_from_snapshot(data)   # includes st.rerun()
                 except Exception as e:
                     st.error(f"Load failed: {e}")
 
@@ -290,10 +358,11 @@ def _render_sidebar():
         st.header("6. Parameter Sweep")
 
         with st.expander("Configure sweep", expanded=False):
+            _units_for_sweep = st.session_state.get("network_units")
             sweep_param = st.selectbox(
                 "Parameter",
                 list(SWEEP_PARAMETERS.keys()),
-                format_func=lambda k: SWEEP_PARAMETERS[k],
+                format_func=lambda k: _sweep_param_label(k, _units_for_sweep),
                 key="sweep_param_input",
             )
             sweep_vals_str = st.text_input(
@@ -379,6 +448,16 @@ def _render_sidebar():
         "sweep": sweep_config,
     }
 
+def _sweep_param_label(key: str, units: dict | None = None) -> str:
+    """Return a sweep-parameter label with the network's units."""
+    if key == "Pmin":
+        u = (units or {}).get("PressureUnit", "m")
+        return f"Min pressure ({u})"
+    if key == "Vmax":
+        u = (units or {}).get("VelocityUnit", "m/s")
+        return f"Max velocity ({u})"
+    return SWEEP_PARAMETERS.get(key, key)
+
 
 # =====================================================================
 #  Preparation: build the Problem dict from loaded files
@@ -424,13 +503,17 @@ def _prepare_problem():
         i for i in range(len(pipe_names)) if i not in fixed_0based
     ]
 
+    # Convert Pmin/Vmax from user-facing (network) units to SI for WNTR
+    Pmin_si = pressure_to_si(st.session_state.pmin, units)
+    Vmax_si = velocity_to_si(st.session_state.vmax, units)
+
     problem = build_optimization_problem(
         wn=wn, Din=Din, Cost=Cost, D_m=D_m,
         full_lengths=lengths, initial_D=initial_D,
         fixed_pipes=fixed_0based,
         variable_pipes=variable_0based,
-        Pmin=st.session_state.pmin,
-        Vmax=st.session_state.vmax,
+        Pmin=Pmin_si,
+        Vmax=Vmax_si,
         pipe_names=pipe_names,
         junction_names=junction_names,
         units=units,
@@ -600,7 +683,13 @@ def _execute_run(algo_label: str):
     st.rerun()
 
 def _restore_from_snapshot(data: dict):
-    """Restore session_state from a loaded snapshot dict."""
+    """Restore session_state from a loaded snapshot dict.
+
+    Widget keys are queued in ``_pending_restore`` and applied on the
+    next render, before widgets are created (see ``_init_widget_state``).
+    Non-widget state (experiment, snapshot, hydraulics) is applied
+    immediately, then ``st.rerun()`` refreshes the UI.
+    """
     import uuid
 
     prob = data["problem"]
@@ -609,7 +698,7 @@ def _restore_from_snapshot(data: dict):
     best = data["best"]
     hyd = data["hydraulics"]
 
-    # ---- Inputs (embedded in .json as of Phase 4) ----
+    # ---- Inputs ----
     inputs = data.get("inputs")
     if inputs and inputs.get("inp"):
         tmpdir = Path(tempfile.gettempdir()) / "wds_optimizer_loaded"
@@ -630,15 +719,53 @@ def _restore_from_snapshot(data: dict):
             c_p.write_text(inputs["cost_txt"], encoding="utf-8")
             st.session_state.cost_path = str(c_p)
 
-    # ---- Config ----
+    # ---- Canonical config keys (safe to set anytime) ----
     for key in ("ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
                 "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed"):
         if key in cfg and cfg[key] is not None:
             st.session_state[key] = cfg[key]
-    st.session_state.pmin = env["pmin"]
-    st.session_state.vmax = env["vmax"]
 
-    # ---- Problem snapshot ----
+    units = prob["Units"]
+    pmin_si = env.get("pmin_si", env.get("pmin"))
+    vmax_si = env.get("vmax_si", env.get("vmax"))
+    pmin_disp = pressure_from_si(pmin_si, units)
+    vmax_disp = velocity_from_si(vmax_si, units)
+    st.session_state.pmin = pmin_disp
+    st.session_state.vmax = vmax_disp
+
+    fixed_list = prob.get("FixedPipes", [])
+    fixed_str = ", ".join(str(int(x) + 1) for x in fixed_list)
+    st.session_state.fixed_pipes = fixed_str
+
+    # ---- Queue widget key updates for next render ----
+    widget_updates = {
+        "ns_input":          int(cfg.get("ns", st.session_state.ns)),
+        "max_gen_input":     int(cfg.get("max_gen", st.session_state.max_gen)),
+        "ga_pc_input":       float(cfg.get("ga_pc", st.session_state.ga_pc)),
+        "ga_pm_input":       float(cfg.get("ga_pm", st.session_state.ga_pm)),
+        "ga_sel_input":      cfg.get("ga_sel", st.session_state.ga_sel),
+        "pso_w_input":       float(cfg.get("pso_w", st.session_state.pso_w)),
+        "pso_c1_input":      float(cfg.get("pso_c1", st.session_state.pso_c1)),
+        "pso_c2_input":      float(cfg.get("pso_c2", st.session_state.pso_c2)),
+        "n_runs_input":      int(cfg.get("n_runs", st.session_state.n_runs)),
+        "exp_seed_input":    int(cfg.get("exp_seed", st.session_state.exp_seed)),
+        "pmin_input":        float(pmin_disp),
+        "vmax_input":        float(vmax_disp),
+        "fixed_pipes_input": fixed_str,
+    }
+
+    # Derive algo_input from the loaded experiment's algorithms.
+    algos = set(data.get("experiment", {}).get("algorithms", []))
+    if algos == {"GA", "PSO"}:
+        widget_updates["algo_input"] = "Both"
+    elif algos == {"PSO"}:
+        widget_updates["algo_input"] = "PSO"
+    else:
+        widget_updates["algo_input"] = "GA"
+
+    st.session_state._pending_restore = widget_updates
+
+    # ---- Non-widget state (applied immediately) ----
     st.session_state.problem_snapshot = {
         "pipe_names": prob["pipe_names"],
         "junction_names": prob["junction_names"],
@@ -654,7 +781,6 @@ def _restore_from_snapshot(data: dict):
         "Units": prob["Units"],
     }
 
-    # ---- Experiment ----
     st.session_state.experiment = restore_experiment(data)
     st.session_state.best_algo = best["algorithm"]
     st.session_state.best_run_index = best["run_index"]
@@ -669,6 +795,8 @@ def _restore_from_snapshot(data: dict):
         float(best_run["score"]) if best_run["score"] is not None
         else float("inf")
     )
+
+    st.rerun()
 
 def _execute_sweep(param_name, values, algorithms, n_runs):
     # Sync sidebar widgets
@@ -688,8 +816,9 @@ def _execute_sweep(param_name, values, algorithms, n_runs):
     _sync("pso_c1",      "pso_c1_input")
     _sync("pso_c2",      "pso_c2_input")
 
+    _units_pre = st.session_state.get("network_units")
     with st.status(
-        f"Sweeping {SWEEP_PARAMETERS.get(param_name, param_name)}...",
+        f"Sweeping {_sweep_param_label(param_name, _units_pre)}...",
         expanded=True,
     ) as status:
         problem, units, wn = _prepare_problem()
@@ -704,7 +833,7 @@ def _execute_sweep(param_name, values, algorithms, n_runs):
         base_cfg.PSO.c2 = st.session_state.pso_c2
 
         st.write(
-            f"Sweeping **{SWEEP_PARAMETERS.get(param_name, param_name)}** "
+            f"Sweeping **{_sweep_param_label(param_name, units)}** "
             f"over **{len(values)}** values: `{values}`"
         )
         st.write(
@@ -755,18 +884,25 @@ def _render_sweep_tab():
         st.info("Configure and run a sweep from the sidebar (section 6).")
         return
 
-    st.subheader(
-        f"Sweep: {SWEEP_PARAMETERS.get(result.parameter, result.parameter)}"
-    )
+    units = st.session_state.get("network_units") or {}
+    st.subheader(f"Sweep: {_sweep_param_label(result.parameter, units)}")
     st.caption(
         f"Algorithms: {', '.join(result.algorithms)} | "
         f"runs/point: {result.n_runs} | seed: {result.experiment_seed}"
     )
 
+    # Dynamic value column header: include units when relevant
+    if result.parameter == "Pmin":
+        value_header = f"Pmin ({units.get('PressureUnit', 'm')})"
+    elif result.parameter == "Vmax":
+        value_header = f"Vmax ({units.get('VelocityUnit', 'm/s')})"
+    else:
+        value_header = "Value"
+
     rows = []
     for p in result.points:
         rows.append({
-            "Value":          f"{p.value:g}",
+            value_header:     f"{p.value:g}",
             "Status":         p.status,
             "Best (feasible)": (
                 f"{p.best_score:,.0f}" if np.isfinite(p.best_score) else "—"
@@ -802,7 +938,7 @@ def _render_sweep_tab():
     ))
     fig.update_layout(
         height=380,
-        xaxis_title=SWEEP_PARAMETERS.get(result.parameter, result.parameter),
+        xaxis_title=_sweep_param_label(result.parameter, units),
         yaxis_title="Cost",
         margin=dict(l=20, r=20, t=20, b=20),
     )
@@ -1092,6 +1228,10 @@ def _render_best_design_tab():
     vel = st.session_state.pipe_velocities
     units = snap["Units"]
     fixed = set(int(x) for x in snap["FixedPipes"])
+    v_unit = units["VelocityUnit"]
+    v_scale = 1.0 if v_unit == "m/s" else 0.3048   # m/s -> display
+    L_unit = units["LengthUnit"]
+    L_scale = 1.0 if L_unit == "m" else 1.0 / 0.3048
 
     # Build table
     rows = []
@@ -1100,14 +1240,15 @@ def _render_best_design_tab():
         d_m = pos[i] if pos is not None else snap["initial_D"][i]
         d_mm = d_m * 1000
         d_in = d_m / 0.0254
-        v = vel[i] if vel is not None and i < len(vel) else float("nan")
+        v_si = vel[i] if vel is not None and i < len(vel) else float("nan")
+        v_disp = v_si / v_scale if v_scale else v_si
         rows.append({
             "Pipe ID": i + 1,
             "Name": name,
-            "Length (m)": f"{L:.0f}",
+            f"Length ({L_unit})": f"{L / L_scale:.0f}",
             "Diameter (mm)": f"{d_mm:.1f}",
             "Diameter (in)": f"{d_in:.2f}",
-            "Velocity (m/s)": f"{v:.3f}",
+            f"Velocity ({v_unit})": f"{v_disp:.3f}",
             "Status": "FIXED" if i in fixed else "variable",
         })
     df = pd.DataFrame(rows)
@@ -1132,56 +1273,70 @@ def _render_hydraulics_tab():
         return
 
     snap = st.session_state.problem_snapshot
-    Pj = st.session_state.node_pressures
-    Vp = st.session_state.pipe_velocities
-    pmin = snap["Pmin"]
-    vmax = snap["Vmax"]
+    Pj_si = st.session_state.node_pressures       # meters
+    Vp_si = st.session_state.pipe_velocities      # m/s
+    pmin_si = snap["Pmin"]
+    vmax_si = snap["Vmax"]
     junc_names = snap["junction_names"]
+    units = snap["Units"]
 
-    if Pj is None or Vp is None:
+    if Pj_si is None or Vp_si is None:
         st.warning("Hydraulic results not available.")
         return
+
+    # Convert to display units
+    p_unit = units["PressureUnit"]
+    v_unit = units["VelocityUnit"]
+    Pj = np.array([pressure_from_si(p, units) for p in Pj_si])
+    Vp = np.array([velocity_from_si(v, units) for v in Vp_si])
+    pmin = pressure_from_si(pmin_si, units)
+    vmax = velocity_from_si(vmax_si, units)
 
     # ---- Node pressures ----
     st.subheader("Node pressures")
     rows = []
     for k, name in enumerate(junc_names):
-        p = Pj[k]
-        status = "Violation ✓" if p < pmin else "OK"
+        # compare in SI to avoid floating-point drift
+        violation = Pj_si[k] < pmin_si
         rows.append({
             "Node ID": k + 1,
             "Name": name,
-            "Pressure (m)": f"{p:.3f}",
-            "Status": status,
+            f"Pressure ({p_unit})": f"{Pj[k]:.3f}",
+            "Status": f"Violation (<{pmin:.2f} {p_unit})"
+                      if violation else "OK",
         })
-    st.dataframe(pd.DataFrame(rows), width="stretch",
-                 hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=junc_names, y=Pj,
-        marker_color=["#e74c3c" if p < pmin else "#2ecc71" for p in Pj],
+        marker_color=["#e74c3c" if Pj_si[i] < pmin_si else "#2ecc71"
+                      for i in range(len(Pj))],
         text=[f"{p:.2f}" for p in Pj], textposition="outside",
     ))
     fig.add_hline(y=pmin, line_dash="dash", line_color="red",
-                  annotation_text=f"Pmin = {pmin} m")
-    fig.update_layout(height=320, yaxis_title="Pressure (m)",
+                  annotation_text=f"Pmin = {pmin:.2f} {p_unit}")
+    fig.update_layout(height=320, yaxis_title=f"Pressure ({p_unit})",
                       margin=dict(l=20, r=20, t=20, b=20))
     st.plotly_chart(fig, width="stretch")
 
-    # ---- Pipe velocities ----
+        # ---- Pipe velocities ----
     st.subheader("Pipe velocities")
     pipe_names = snap["pipe_names"]
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=pipe_names, y=Vp,
-        marker_color=["#e74c3c" if v > vmax else "#3498db" for v in Vp],
+        marker_color=["#e74c3c" if Vp_si[i] > vmax_si else "#3498db"
+                      for i in range(len(Vp))],
         text=[f"{v:.2f}" for v in Vp], textposition="outside",
     ))
     fig.add_hline(y=vmax, line_dash="dash", line_color="red",
-                  annotation_text=f"Vmax = {vmax} m/s")
-    fig.update_layout(height=320, yaxis_title="Velocity (m/s)",
-                      margin=dict(l=20, r=20, t=20, b=20))
+                  annotation_text=f"Vmax = {vmax:.2f} {v_unit}")
+    fig.update_layout(
+        height=320,
+        yaxis_title=f"Velocity ({v_unit})",
+        margin=dict(l=20, r=20, t=20, b=20),
+    )
     st.plotly_chart(fig, width="stretch")
 
     # ---- Status line ----
@@ -1190,8 +1345,8 @@ def _render_hydraulics_tab():
         else "⚠ Not converged"
     )
     st.caption(
-        f"Min pressure: {Pj.min():.2f} m | "
-        f"Max velocity: {Vp.max():.2f} m/s | {conv_txt}"
+        f"Min pressure: {Pj.min():.2f} {p_unit} | "
+        f"Max velocity: {Vp.max():.2f} {v_unit} | {conv_txt}"
     )
 
 
@@ -1215,25 +1370,34 @@ def _render_map_tab():
 
     wn = _load_network(st.session_state.inp_path)
 
-    # Compute coloring data
+    # Compute coloring data (in display units)
     pressures = None
     velocities = None
     diameters = None
     pmin = vmax = None
     fixed_1based = []
+    units = st.session_state.get("network_units") or {}
 
     if st.session_state.experiment is not None:
         snap = st.session_state.problem_snapshot
-        Pj = st.session_state.node_pressures
-        Vp = st.session_state.pipe_velocities
+        Pj_si = st.session_state.node_pressures
+        Vp_si = st.session_state.pipe_velocities
         pos = st.session_state.best_position_m
 
-        pressures = dict(zip(snap["junction_names"], Pj))
-        velocities = dict(zip(snap["pipe_names"], Vp))
-        diameters = dict(zip(snap["pipe_names"],
-                             [pos[i] for i in range(len(snap["pipe_names"]))]))
-        pmin = snap["Pmin"]
-        vmax = snap["Vmax"]
+        pressures = {
+            n: pressure_from_si(p, units)
+            for n, p in zip(snap["junction_names"], Pj_si)
+        }
+        velocities = {
+            n: velocity_from_si(v, units)
+            for n, v in zip(snap["pipe_names"], Vp_si)
+        }
+        diameters = {
+            n: diameter_to_display(pos[i], units)
+            for i, n in enumerate(snap["pipe_names"])
+        }
+        pmin = pressure_from_si(snap["Pmin"], units)
+        vmax = velocity_from_si(snap["Vmax"], units)
         fixed_1based = [int(x) + 1 for x in snap["FixedPipes"]]
 
     fig = build_network_figure(
@@ -1242,6 +1406,7 @@ def _render_map_tab():
         pmin=pmin, vmax=vmax,
         fixed_pipe_indices=fixed_1based,
         show_labels=show_labels,
+        units=units,                    # ← جدید
     )
     st.plotly_chart(fig, width="stretch")
 

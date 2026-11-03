@@ -8,7 +8,8 @@ import wntr
 def build_network_figure(wn, mode="preview",
                          pressures=None, velocities=None,
                          diameters=None, pmin=None, vmax=None,
-                         fixed_pipe_indices=None, show_labels=False):
+                         fixed_pipe_indices=None, show_labels=False,
+                         units=None):
     """Return a Plotly Figure.
 
     Parameters
@@ -32,13 +33,15 @@ def build_network_figure(wn, mode="preview",
     if mode == "velocity" and velocities is not None:
         vals = [velocities.get(p, np.nan) for p in pipe_names]
         colorscale = "RdYlGn_r"
-        cbar_title = "Velocity (m/s)"
+        v_unit = (units or {}).get("VelocityUnit", "m/s")
+        cbar_title = f"Velocity ({v_unit})"
         cmin = 0
         cmax = max(vmax or 2.5, max([v for v in vals if np.isfinite(v)] or [1]))
     elif mode == "diameter" and diameters is not None:
         vals = [diameters.get(p, np.nan) for p in pipe_names]
         colorscale = "Viridis"
-        cbar_title = "Diameter (m)"
+        d_unit = (units or {}).get("DiameterUnit", "mm")
+        cbar_title = f"Diameter ({d_unit})"
         cmin = min([v for v in vals if np.isfinite(v)] or [0])
         cmax = max([v for v in vals if np.isfinite(v)] or [1])
     else:
@@ -95,12 +98,13 @@ def build_network_figure(wn, mode="preview",
     if color_by_pressure:
         lo = min([v for v in junc_vals if np.isfinite(v)] + [pmin or 0])
         hi = max([v for v in junc_vals if np.isfinite(v)] + [pmin or 1])
+        p_unit = (units or {}).get("PressureUnit", "m")
         fig.add_trace(go.Scatter(
             x=junc_x, y=junc_y, mode="markers+text" if show_labels else "markers",
             marker=dict(
                 size=12, color=junc_vals, colorscale="RdYlGn",
                 cmin=lo, cmax=hi, showscale=True,
-                colorbar=dict(title="Pressure (m)"),
+                colorbar=dict(title=f"Pressure ({p_unit})"),
                 line=dict(width=1, color="black"),
             ),
             text=junc_names if show_labels else None,

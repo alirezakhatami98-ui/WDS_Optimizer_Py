@@ -76,7 +76,9 @@ def build_snapshot(
             "diam_unit": problem_snapshot.get("Units", {}).get(
                 "DiameterUnit", "mm"
             ),
-            "pmin": problem_snapshot["Pmin"],
+            "pmin_si": problem_snapshot["Pmin"],      # SI, always
+            "vmax_si": problem_snapshot["Vmax"],      # SI, always
+            "pmin": problem_snapshot["Pmin"],         # backward compat
             "vmax": problem_snapshot["Vmax"],
         },
         "config": {k: config.get(k) for k in (

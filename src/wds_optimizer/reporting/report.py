@@ -21,6 +21,9 @@ from .figures import (
 )
 from ..experiments.runner import summarize_experiment
 from ..persistence.snapshot import build_snapshot
+from ..hydraulics.units import (
+    diameter_to_display, pressure_from_si, velocity_from_si,
+)
 
 
 def build_report_zip(
@@ -44,6 +47,10 @@ def build_report_zip(
         wn = None
 
     pipe_names = list(problem_snapshot["pipe_names"])
+    units = problem_snapshot["Units"]
+    p_unit = units.get("PressureUnit", "m")
+    v_unit = units.get("VelocityUnit", "m/s")
+    d_unit = units.get("DiameterUnit", "mm")
     junction_names = list(problem_snapshot["junction_names"])
     pmin = problem_snapshot["Pmin"]
     vmax = problem_snapshot["Vmax"]
@@ -61,16 +68,16 @@ def build_report_zip(
     _try("convergence.png", make_convergence_png, experiment)
     _try("cost_distribution.png", make_cost_distribution_png, experiment)
     _try("node_pressures.png", make_pressure_png,
-         junction_names, node_pressures, pmin)
+         junction_names, node_pressures, pmin, units)
     _try("pipe_velocities.png", make_velocity_png,
-         pipe_names, pipe_velocities, vmax)
+         pipe_names, pipe_velocities, vmax, units)
     if wn is not None:
         for mode in ("velocity", "diameter", "pressure"):
             _try(f"network_map_{mode}.png", make_network_map_png,
                  wn, pipe_names, junction_names, best_position_m,
                  pipe_velocities, node_pressures,
                  mode=mode, fixed_pipe_indices=fixed_pipes,
-                 pmin=pmin, vmax=vmax)
+                 pmin=pmin, vmax=vmax, units=units)
 
     # ---- Snapshot ----
     try:
@@ -130,22 +137,28 @@ def build_report_zip(
     pipes_rows = []
     for i, pname in enumerate(pipe_names):
         d_m = best_position_m[i]
+        v_si = pipe_velocities[i]
+        v_disp = velocity_from_si(v_si, units)
+        # velocity column name: Velocity_m_s or Velocity_ft_s
+        v_col = f"Velocity_{v_unit.replace('/', '_')}"
         pipes_rows.append({
             "Pipe_ID": i + 1, "Name": pname,
-            "Diameter_m": f"{d_m:.6f}",
+            f"Diameter_{d_unit}": f"{diameter_to_display(d_m, units):.3f}",
             "Diameter_mm": f"{d_m * 1000:.2f}",
             "Diameter_in": f"{d_m / 0.0254:.3f}",
-            "Velocity_m_s": f"{pipe_velocities[i]:.4f}",
+            v_col: f"{v_disp:.4f}",
             "Fixed": "Yes" if i in fixed_pipes else "No",
         })
 
     nodes_rows = []
     for i, nname in enumerate(junction_names):
-        p = node_pressures[i]
+        p_si = node_pressures[i]
+        p_disp = pressure_from_si(p_si, units)
+        p_col = f"Pressure_{p_unit}"
         nodes_rows.append({
             "Node_ID": i + 1, "Name": nname,
-            "Pressure_m": f"{p:.4f}",
-            "Status": "Violation" if p < pmin else "OK",
+            p_col: f"{p_disp:.4f}",
+            "Status": "Violation" if p_si < pmin else "OK",
         })
 
     # ---- Markdown + README ----
@@ -215,6 +228,12 @@ def _build_markdown(*, experiment, summary, best_algo, best_run_index,
     pmin = problem_snapshot["Pmin"]
     vmax = problem_snapshot["Vmax"]
     D = problem_snapshot["D_m"]
+    units = problem_snapshot["Units"]
+    p_unit = units.get("PressureUnit", "m")
+    v_unit = units.get("VelocityUnit", "m/s")
+    d_unit = units.get("DiameterUnit", "mm")
+    pmin_disp = pressure_from_si(pmin, units)
+    vmax_disp = velocity_from_si(vmax, units)
 
     L = []
     L.append("# WDS Optimizer — Reproducibility Report\n")
@@ -232,8 +251,10 @@ def _build_markdown(*, experiment, summary, best_algo, best_run_index,
     L.append(f"- **Runs per algorithm:** {experiment.number_of_runs}")
     L.append(f"- **Experiment seed:** {experiment.experiment_seed}")
     L.append(f"- **Algorithms:** {', '.join(experiment.algorithms)}")
-    L.append(f"- **Pmin:** {pmin} m")
-    L.append(f"- **Vmax:** {vmax} m/s")
+    L.append(f"- **Pmin:** {pmin_disp:.2f} {p_unit} "
+             f"({pmin:.3f} m)")
+    L.append(f"- **Vmax:** {vmax_disp:.2f} {v_unit} "
+             f"({vmax:.3f} m/s)")
     L.append(f"- **Diameter options:** {len(D)} "
              f"({D[0]*1000:.1f} – {D[-1]*1000:.1f} mm)\n")
 
@@ -257,23 +278,27 @@ def _build_markdown(*, experiment, summary, best_algo, best_run_index,
     L.append(f"- **Hydraulics converged:** "
              f"{'Yes' if hydraulics_converged else 'No'}\n")
 
-    L.append("### Pipe diameters and velocities\n")
-    L.append("| Pipe | Name | Diameter (mm) | Diameter (in) | "
-             "Velocity (m/s) |")
+    L.append(f"### Pipe diameters and velocities\n")
+    L.append(f"| Pipe | Name | Diameter ({d_unit}) | "
+             f"Diameter (mm) | Velocity ({v_unit}) |")
     L.append("|---|---|---|---|---|")
     for i, pname in enumerate(pipe_names):
         d_m = best_position_m[i]
-        L.append(f"| {i+1} | {pname} | {d_m*1000:.1f} | "
-                 f"{d_m/0.0254:.2f} | {pipe_velocities[i]:.3f} |")
+        v_disp = velocity_from_si(pipe_velocities[i], units)
+        L.append(f"| {i+1} | {pname} | "
+                 f"{diameter_to_display(d_m, units):.2f} | "
+                 f"{d_m*1000:.1f} | "
+                 f"{v_disp:.3f} |")
     L.append("")
 
-    L.append("### Node pressures\n")
-    L.append("| Node | Name | Pressure (m) | Status |")
+    L.append(f"### Node pressures\n")
+    L.append(f"| Node | Name | Pressure ({p_unit}) | Status |")
     L.append("|---|---|---|---|")
     for i, nname in enumerate(problem_snapshot["junction_names"]):
-        p = node_pressures[i]
-        status = "Violation" if p < pmin else "OK"
-        L.append(f"| {i+1} | {nname} | {p:.3f} | {status} |")
+        p_si = node_pressures[i]
+        p_disp = pressure_from_si(p_si, units)
+        status = "Violation" if p_si < pmin else "OK"
+        L.append(f"| {i+1} | {nname} | {p_disp:.3f} | {status} |")
     L.append("")
 
     L.append("## Figures\n")

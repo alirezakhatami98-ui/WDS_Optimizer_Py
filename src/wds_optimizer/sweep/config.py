@@ -33,10 +33,10 @@ def parse_sweep_values(raw: str) -> list[float]:
 
 
 def apply_sweep_parameter(base_cfg, problem, param_name, value, n_runs):
-    """Return (cfg, problem, n_runs) with the sweep parameter applied."""
     cfg = copy.deepcopy(base_cfg)
-    prob = dict(problem)  # shallow copy — enough for scalar overrides
+    prob = dict(problem)
     n = n_runs
+    units = problem.get("Units", {})
 
     if param_name == "GA_Pc":
         cfg.GA.Pc = float(value)
@@ -55,11 +55,14 @@ def apply_sweep_parameter(base_cfg, problem, param_name, value, n_runs):
     elif param_name == "NumberOfRuns":
         n = int(value)
     elif param_name == "Pmin":
-        prob["Pmin"] = float(value)
+        # value is in network units; convert to SI
+        factor = 0.70307 if units.get("PressureUnit") == "psi" else 1.0
+        prob["Pmin"] = float(value) * factor
     elif param_name == "Vmax":
-        prob["Vmax"] = float(value)
+        factor = 0.3048 if units.get("VelocityUnit") == "ft/s" else 1.0
+        prob["Vmax"] = float(value) * factor
     elif param_name == "ExperimentSeed":
-        pass  # seed is passed separately to run_experiment
+        pass
     else:
         raise ValueError(f"Unknown sweep parameter: {param_name}")
 
