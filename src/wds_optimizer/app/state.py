@@ -12,6 +12,8 @@ _KEYS = {
     "ga_pc": 0.8, "ga_pm": 0.03, "ga_sel": "tournament",
     "pso_w": 0.7, "pso_c1": 1.5, "pso_c2": 1.5,
     "n_runs": 3, "exp_seed": 1,
+    "rs_enabled": False, "rs_patience": 30, "rs_max": 3,
+    "rs_keep_best": False, "rs_mode": "perturb", "rs_perturb": 0.3,
     "experiment": None,
     "best_algo": None, "best_run_index": None,
     "best_position_m": None, "best_score": None, "best_feasible": False,
@@ -43,4 +45,4 @@ def reset_experiment():
         "hydraulics_converged", "problem_snapshot", "sweep_result",
         "report_zip", "report_filename",
     ):
-        st.session_state[key] = _KEYS[key]
+        st.session_state[key] = _KEYS[key]

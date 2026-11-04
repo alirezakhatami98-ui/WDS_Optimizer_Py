@@ -31,6 +31,12 @@ def _run_to_dict(r: RunRecord) -> dict:
         ),
         "status": r.status,
         "error_message": r.error_message,
+        "restart_gens": [int(g) for g in getattr(r, "restart_gens", [])],
+        # inf (no feasible design in that epoch) is stored as null
+        "epoch_bests": [
+            float(c) if np.isfinite(c) else None
+            for c in getattr(r, "epoch_bests", [])
+        ],
     }
 
 
@@ -51,6 +57,11 @@ def _dict_to_run(d: dict) -> RunRecord:
         ),
         status=d["status"],
         error_message=d["error_message"],
+        restart_gens=list(d.get("restart_gens", [])),   # old files: []
+        epoch_bests=[
+            float("inf") if c is None else float(c)
+            for c in d.get("epoch_bests", [])
+        ],
     )
 
 
@@ -84,6 +95,8 @@ def build_snapshot(
         "config": {k: config.get(k) for k in (
             "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
             "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
+            "rs_enabled", "rs_patience", "rs_max", "rs_keep_best",
+            "rs_mode", "rs_perturb",
         )},
         "problem": {
             "pipe_names":     list(problem_snapshot["pipe_names"]),
@@ -107,6 +120,7 @@ def build_snapshot(
             "NS":              experiment.NS,
             "MaxGen":          experiment.MaxGen,
             "cancelled":       bool(getattr(experiment, "cancelled", False)),
+            "restart":         dict(getattr(experiment, "restart", {}) or {}),
             "runs": {
                 algo: [_run_to_dict(r) for r in runs]
                 for algo, runs in experiment.runs.items()
@@ -163,6 +177,7 @@ def restore_experiment(data: dict) -> ExperimentResult:
         variable_pipes=np.array(data["problem"]["VariablePipes"]),
         fixed_pipes=np.array(data["problem"]["FixedPipes"]),
         cancelled=bool(exp.get("cancelled", False)),   # old files: False
+        restart=dict(exp.get("restart", {})),          # old files: {}
     )
     for algo, runs in exp["runs"].items():
         result.runs[algo] = [_dict_to_run(r) for r in runs]

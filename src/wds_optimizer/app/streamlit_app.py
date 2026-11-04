@@ -198,6 +198,13 @@ def _init_widget_state():
         "n_runs_input":      int(st.session_state.get("n_runs", 3)),
         "exp_seed_input":    int(st.session_state.get("exp_seed", 1)),
         "algo_input":        "GA",
+        "rs_enabled_input":  bool(st.session_state.get("rs_enabled", False)),
+        "rs_patience_input": int(st.session_state.get("rs_patience", 30)),
+        "rs_max_input":      int(st.session_state.get("rs_max", 3)),
+        "rs_keep_best_input": bool(
+            st.session_state.get("rs_keep_best", False)),
+        "rs_mode_input":     st.session_state.get("rs_mode", "perturb"),
+        "rs_perturb_input":  float(st.session_state.get("rs_perturb", 0.3)),
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -331,6 +338,59 @@ def _render_sidebar():
                 st.number_input("c2 (social)", 0.0, 3.0, step=0.1,
                                 key="pso_c2_input")
 
+        with st.expander("Restart on stagnation", expanded=False):
+            rs_on = st.checkbox(
+                "Enable restart", key="rs_enabled_input",
+                help="Re-initialise the population when the search "
+                     "stagnates. The best solution found so far is always "
+                     "kept, and the total number of generations does not "
+                     "change.",
+            )
+            st.number_input(
+                "Patience (generations without improvement)",
+                min_value=2, max_value=5000, step=1,
+                key="rs_patience_input", disabled=not rs_on,
+            )
+            st.number_input(
+                "Max restarts per run", min_value=1, max_value=50, step=1,
+                key="rs_max_input", disabled=not rs_on,
+            )
+            rs_mode = st.radio(
+                "Restart type",
+                ["perturb", "random"],
+                format_func=lambda m: {
+                    "perturb": "Perturb best design",
+                    "random": "Random population",
+                }[m],
+                key="rs_mode_input", disabled=not rs_on,
+                help="Perturb: new population = copies of the best design "
+                     "with a share of the pipes re-drawn (keeps what is "
+                     "already good, explores nearby basins). Random: "
+                     "discards everything and starts over; each new epoch "
+                     "must climb again from scratch.",
+            )
+            st.slider(
+                "Pipes re-drawn (perturb)", 0.05, 0.9, step=0.05,
+                key="rs_perturb_input",
+                disabled=(not rs_on) or rs_mode != "perturb",
+            )
+            st.checkbox(
+                "Keep best solution in the new population",
+                key="rs_keep_best_input",
+                disabled=(not rs_on) or rs_mode != "random",
+                help="Random type only. Off: fully independent restart "
+                     "(more exploration). On: the best design seeds the "
+                     "new population.",
+            )
+            if rs_on:
+                _pat = int(st.session_state.get("rs_patience_input", 30))
+                _mg = int(st.session_state.get("max_gen_input", 100))
+                _fit = max(0, _mg // (_pat + 1) - 1)
+                st.caption(
+                    f"Budget is unchanged (MaxGen = {_mg}). At most ~{_fit} "
+                    f"restart(s) can fit with this patience."
+                )
+
         st.divider()
         st.header("4. Experiment")
         st.number_input("Runs per algorithm", min_value=1, max_value=50,
@@ -379,6 +439,8 @@ def _render_sidebar():
                     config={k: st.session_state[k] for k in (
                         "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
                         "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
+                        "rs_enabled", "rs_patience", "rs_max",
+                        "rs_keep_best", "rs_mode", "rs_perturb",
                     )},
                     inp_content=inp_content,
                     d_content=d_content,
@@ -476,6 +538,8 @@ def _render_sidebar():
                             config={k: st.session_state[k] for k in (
                                 "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
                                 "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
+                        "rs_enabled", "rs_patience", "rs_max",
+                        "rs_keep_best", "rs_mode", "rs_perturb",
                             )},
                         )
                         st.session_state.report_zip = zip_bytes
@@ -595,6 +659,12 @@ def _sync_sidebar_state(with_n_runs: bool = True):
         ("ga_sel", "ga_sel_input"),
         ("pso_w", "pso_w_input"), ("pso_c1", "pso_c1_input"),
         ("pso_c2", "pso_c2_input"),
+        ("rs_enabled", "rs_enabled_input"),
+        ("rs_patience", "rs_patience_input"),
+        ("rs_max", "rs_max_input"),
+        ("rs_keep_best", "rs_keep_best_input"),
+        ("rs_mode", "rs_mode_input"),
+        ("rs_perturb", "rs_perturb_input"),
     ]
     if with_n_runs:
         pairs.append(("n_runs", "n_runs_input"))
@@ -613,6 +683,17 @@ def _build_base_cfg():
     cfg.PSO.w = st.session_state.pso_w
     cfg.PSO.c1 = st.session_state.pso_c1
     cfg.PSO.c2 = st.session_state.pso_c2
+    cfg.Restart.Enabled = bool(st.session_state.rs_enabled)
+    cfg.Restart.Patience = int(st.session_state.rs_patience)
+    cfg.Restart.MaxRestarts = int(st.session_state.rs_max)
+    cfg.Restart.KeepBest = bool(st.session_state.rs_keep_best)
+    cfg.Restart.Mode = str(st.session_state.rs_mode)
+    cfg.Restart.PerturbRate = float(st.session_state.rs_perturb)
+    if cfg.Restart.Enabled and cfg.Restart.Patience >= cfg.MaxGen:
+        raise ValueError(
+            f"Restart patience ({cfg.Restart.Patience}) must be smaller "
+            f"than MaxGen ({cfg.MaxGen}); otherwise no restart can happen."
+        )
     return cfg
 
 
@@ -644,6 +725,10 @@ def _start_run(algo_label: str):
         f"**{len(problem['FixedPipes'])}** fixed  |  "
         f"Algorithms: **{', '.join(algos)}** × **{n_runs}** runs, "
         f"NS={st.session_state.ns}, MaxGen={st.session_state.max_gen}"
+        + (f"  |  Restart ({base_cfg.Restart.Mode}): patience "
+           f"**{base_cfg.Restart.Patience}**, "
+           f"max **{base_cfg.Restart.MaxRestarts}**"
+           if base_cfg.Restart.Enabled else "")
     )
 
     def target(progress_cb, cancel_cb):
@@ -659,7 +744,8 @@ def _start_run(algo_label: str):
     job = BackgroundJob(
         "run", label="Experiment",
         context={"problem": problem, "units": units, "wn": wn,
-                 "algos": algos, "n_runs": n_runs, "summary": summary},
+                 "algos": algos, "n_runs": n_runs, "summary": summary,
+                 "restart_on": bool(base_cfg.Restart.Enabled)},
     )
     job.start(target)
     st.session_state.job = job
@@ -745,7 +831,9 @@ def _job_panel():
             f"**{prog['RunLabel']}** | Gen **{prog['Generation']}/"
             f"{prog['MaxGenerations']}** | Best cost: "
             f"**{prog['BestCost']:,.0f}** | {feas} | "
-            f"elapsed {job.elapsed:.0f} s"
+            + (f"Restarts: **{prog.get('Restarts', 0)}** | "
+               if ctx.get("restart_on") else "")
+            + f"elapsed {job.elapsed:.0f} s"
         )
         conv = prog["Convergence"]
         color = "#d9480f" if prog["Algorithm"] == "GA" else "#1971c2"
@@ -754,6 +842,9 @@ def _job_panel():
             x=np.arange(1, len(conv) + 1), y=conv, mode="lines",
             line=dict(color=color, width=2), name=prog["RunLabel"],
         ))
+        for g in prog.get("RestartGens", []):
+            fig.add_vline(x=g, line_dash="dot", line_color="gray",
+                          opacity=0.7)
         fig.update_layout(
             height=280, margin=dict(l=20, r=20, t=30, b=20),
             xaxis_title="Generation / Iteration", yaxis_title="Best cost",
@@ -948,7 +1039,9 @@ def _restore_from_snapshot(data: dict):
 
     # ---- Canonical config keys (safe to set anytime) ----
     for key in ("ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
-                "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed"):
+                "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
+                "rs_enabled", "rs_patience", "rs_max", "rs_keep_best",
+                "rs_mode", "rs_perturb"):
         if key in cfg and cfg[key] is not None:
             st.session_state[key] = cfg[key]
 
@@ -976,6 +1069,14 @@ def _restore_from_snapshot(data: dict):
         "pso_c2_input":      float(cfg.get("pso_c2", st.session_state.pso_c2)),
         "n_runs_input":      int(cfg.get("n_runs", st.session_state.n_runs)),
         "exp_seed_input":    int(cfg.get("exp_seed", st.session_state.exp_seed)),
+        # old snapshots have no restart keys -> disabled (as they were run)
+        "rs_enabled_input":  bool(cfg.get("rs_enabled") or False),
+        "rs_patience_input": int(cfg.get("rs_patience") or 30),
+        "rs_max_input":      int(cfg.get("rs_max") or 3),
+        "rs_keep_best_input": bool(cfg.get("rs_keep_best") or False),
+        # files saved before restart modes existed used random restarts
+        "rs_mode_input":     cfg.get("rs_mode") or "random",
+        "rs_perturb_input":  float(cfg.get("rs_perturb") or 0.3),
         "pmin_input":        float(pmin_disp),
         "vmax_input":        float(vmax_disp),
         "fixed_pipes_input": fixed_str,
@@ -1594,6 +1695,11 @@ def _render_all_runs_tab():
                 "Run": r.run_index,
                 "Seed": r.seed,
                 "Status": r.status,
+                "Restarts": len(getattr(r, "restart_gens", [])),
+                "Epoch bests": " | ".join(
+                    f"{c:,.0f}" if np.isfinite(c) else "–"
+                    for c in getattr(r, "epoch_bests", [])
+                ),
                 "Cost": (
                     f"{r.score:,.0f}" if np.isfinite(r.score) else "—"
                 ),
@@ -1718,4 +1824,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()

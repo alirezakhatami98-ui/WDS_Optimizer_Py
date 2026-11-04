@@ -20,6 +20,28 @@ class PSOConfig:
 
 
 @dataclass
+class RestartConfig:
+    """Restart-on-stagnation (shared by GA and PSO).
+
+    When the best solution of the *current epoch* has not improved for
+    ``Patience`` consecutive generations/iterations, the population is
+    re-initialised at random.  The best solution over all epochs is always
+    kept, so a restart can never make the final result worse.  The total
+    number of generations (``MaxGen``) is NOT extended: restarts
+    redistribute the existing budget.
+    """
+    Enabled: bool = False
+    Patience: int = 30            # generations without improvement
+    MaxRestarts: int = 3          # per run
+    # "random"  : fresh random population (optionally seeded with the best)
+    # "perturb" : copies of the best design with a fraction of the pipes
+    #             re-randomised (a "cataclysmic" restart, as in CHC)
+    Mode: str = "perturb"
+    KeepBest: bool = False        # random mode only
+    PerturbRate: float = 0.3      # perturb mode: share of genes re-drawn
+
+
+@dataclass
 class ParallelConfig:
     Enabled: bool = False
     NumWorkers: int = 2
@@ -33,6 +55,7 @@ class AlgorithmConfig:
     Cache: Optional[dict] = None
     GA: GAConfig = field(default_factory=GAConfig)
     PSO: PSOConfig = field(default_factory=PSOConfig)
+    Restart: RestartConfig = field(default_factory=RestartConfig)
     Parallel: ParallelConfig = field(default_factory=ParallelConfig)
 
 

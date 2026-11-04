@@ -1,6 +1,6 @@
 """Parameter sensitivity sweep."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
 import numpy as np
@@ -57,6 +57,11 @@ def run_parameter_sweep(
         cfg, prob, n = apply_sweep_parameter(
             base_cfg, problem, parameter_name, v, n_runs
         )
+        # Make sure the restart settings from the sidebar survive
+        # apply_sweep_parameter (unless the swept parameter is a restart one).
+        if (getattr(base_cfg, "Restart", None) is not None
+                and not parameter_name.startswith("Restart")):
+            cfg.Restart = replace(base_cfg.Restart)
         seed = int(v) if parameter_name == "ExperimentSeed" else experiment_seed
 
         if progress_callback:

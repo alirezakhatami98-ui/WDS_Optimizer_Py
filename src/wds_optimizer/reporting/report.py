@@ -127,6 +127,14 @@ def build_report_zip(
             runs_rows.append({
                 "Algorithm": algo, "Run": r.run_index, "Seed": r.seed,
                 "Status": r.status,
+                "Restarts": len(getattr(r, "restart_gens", [])),
+                "Restart_at_gen": " ".join(
+                    str(g) for g in getattr(r, "restart_gens", [])
+                ),
+                "Epoch_best_costs": " | ".join(
+                    f"{c:.2f}" if np.isfinite(c) else "none"
+                    for c in getattr(r, "epoch_bests", [])
+                ),
                 "Cost": f"{r.score:.2f}" if np.isfinite(r.score) else "",
                 "Feasible": "Yes" if r.feasible else "No",
                 "Time_s": (f"{r.execution_time:.3f}"
@@ -219,6 +227,23 @@ def _to_csv(rows) -> str:
     return buf.getvalue()
 
 
+def _restart_text(experiment) -> str:
+    rs = getattr(experiment, "restart", None) or {}
+    if not rs.get("enabled"):
+        return "disabled"
+    mode = rs.get("mode", "random")     # files written before modes: random
+    if mode == "perturb":
+        how = (f"perturb best design "
+               f"({100 * float(rs.get('perturb_rate', 0.3)):.0f}% of pipes "
+               f"re-drawn)")
+    else:
+        how = ("random population, best kept: "
+               + ("yes" if rs.get("keep_best") else "no"))
+    return (f"enabled (patience {rs.get('patience')} generations, "
+            f"max {rs.get('max_restarts')} restarts per run, {how}; "
+            f"total MaxGen unchanged)")
+
+
 def _build_markdown(*, experiment, summary, best_algo, best_run_index,
                     best_position_m, node_pressures, pipe_velocities,
                     hydraulics_converged, problem_snapshot, config,
@@ -258,6 +283,7 @@ def _build_markdown(*, experiment, summary, best_algo, best_run_index,
     L.append(f"- **Runs per algorithm:** {experiment.number_of_runs}")
     L.append(f"- **Experiment seed:** {experiment.experiment_seed}")
     L.append(f"- **Algorithms:** {', '.join(experiment.algorithms)}")
+    L.append(f"- **Restart on stagnation:** {_restart_text(experiment)}")
     L.append(f"- **Pmin:** {pmin_disp:.2f} {p_unit} "
              f"({pmin:.3f} m)")
     L.append(f"- **Vmax:** {vmax_disp:.2f} {v_unit} "
@@ -358,6 +384,7 @@ Contents
 {"NOTE: this experiment was CANCELLED by the user; results are partial." + chr(10) if getattr(experiment, "cancelled", False) else ""}Configuration
 -------------
   Algorithms        : {', '.join(experiment.algorithms)}
+  Restart           : {_restart_text(experiment)}
   Runs per algo     : {experiment.number_of_runs}
   Experiment seed   : {experiment.experiment_seed}
   NS                : {experiment.NS}

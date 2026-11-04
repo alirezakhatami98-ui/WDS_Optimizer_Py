@@ -21,13 +21,16 @@ class GACancelled(Exception):
         self.partial = partial
 
 def run_ga(problem, config,
-           progress_callback=None, cancel_callback=None):
+           progress_callback=None, cancel_callback=None, meta=None):
     """Run GA.
 
     progress_callback : callable(info_dict) or None
         Called at selected generations with keys:
         Algorithm, Generation, MaxGenerations, BestCost, Feasible,
         Convergence (np.ndarray of length G+1)
+    meta : dict or None
+        If given, ``meta["restart_gens"]`` is filled with the generation
+        numbers (1-based) after which a restart happened.
     cancel_callback : callable() -> bool or None
         If it returns True, raises ``GACancelled`` (carrying the
         best-so-far result in ``.partial`` when one exists).
@@ -66,10 +69,26 @@ def run_ga(problem, config,
     ProgressInterval = max(1, MaxGen // 50)
     ProgressFailed = False
 
+    # ---- restart-on-stagnation (disabled => no extra RNG use) ----
+    rs = getattr(config, "Restart", None)
+    rs_on = bool(rs is not None and rs.Enabled)
+    patience = int(rs.Patience) if rs_on else 0
+    max_restarts = int(rs.MaxRestarts) if rs_on else 0
+    keep_best = bool(rs_on and rs.KeepBest)
+    perturb = bool(rs_on and rs.Mode == "perturb")
+    perturb_rate = float(rs.PerturbRate) if rs_on else 0.0
+    restart_gens = []
+    epoch_bests = []          # best feasible cost of each epoch (inf = none)
+    stall = 0
+    if meta is not None:
+        meta["restart_gens"] = restart_gens
+        meta["epoch_bests"] = epoch_bests
+
     for G in range(MaxGen):
         # ---- cancellation check ----
         if cancel_callback is not None and cancel_callback():
             partial = None
+            epoch_bests.append(float(BestCostEver))
             if GlobalSol is not None:        # at least one generation done
                 pos = problem["InitialD"].copy()
                 pos[problem["VariablePipes"]] = problem["D"][GlobalSol]
@@ -122,17 +141,20 @@ def run_ga(problem, config,
         cost, viol, feas = evaluate_population(Pop, problem, cache)
 
         # ---- update epoch bests ----
+        epoch_improved = False
         f_idx = np.where(feas)[0]
         if f_idx.size:
             k = int(f_idx[np.argmin(cost[f_idx])])
             if cost[k] < BestCostEver:
                 BestCostEver, BestSolEver = cost[k], Pop[:, k].copy()
+                epoch_improved = True
 
         iv = int(np.argmin(viol))
         if viol[iv] < BestViolEver:
             BestViolEver = viol[iv]
             BestUnfSol = Pop[:, iv].copy()
             BestUnfCost = cost[iv]
+            epoch_improved = True
 
         if BestSolEver is not None:
             eCost, eViol = BestCostEver, 0.0
@@ -147,6 +169,35 @@ def run_ga(problem, config,
 
         Conv[G] = GlobalCost
 
+        # ---- stagnation detection / restart ----
+        stall = 0 if epoch_improved else stall + 1
+        if (rs_on and stall >= patience
+                and len(restart_gens) < max_restarts
+                and (MaxGen - (G + 1)) > patience):
+            restart_gens.append(G + 1)
+            epoch_bests.append(float(BestCostEver))
+            if perturb:
+                # copies of the best design, each gene re-drawn with
+                # probability `perturb_rate`; column 0 keeps the best intact
+                Pop = np.tile(GlobalSol[:, None], (1, NS))
+                mask = rng.random((NVar, NS)) < perturb_rate
+                Pop[mask] = rng.integers(0, ND, size=int(mask.sum()))
+                Pop[:, 0] = GlobalSol
+            else:
+                Pop = rng.integers(0, ND, size=(NVar, NS))
+            BestSolEver, BestCostEver, BestViolEver = None, np.inf, np.inf
+            BestUnfSol, BestUnfCost = None, np.inf
+            if keep_best or perturb:
+                Pop[:, 0] = GlobalSol
+                if GlobalViol == 0.0:
+                    BestSolEver = GlobalSol.copy()
+                    BestCostEver, BestViolEver = GlobalCost, 0.0
+                else:
+                    BestUnfSol = GlobalSol.copy()
+                    BestUnfCost, BestViolEver = GlobalCost, GlobalViol
+            cost, viol, feas = evaluate_population(Pop, problem, cache)
+            stall = 0
+
         if progress_callback is not None and not ProgressFailed:
             if (G == 0) or ((G % ProgressInterval) == 0) or (G == MaxGen - 1):
                 try:
@@ -157,10 +208,14 @@ def run_ga(problem, config,
                         "BestCost": float(Conv[G]),
                         "Feasible": bool(GlobalViol == 0.0),
                         "Convergence": Conv[: G + 1].copy(),
+                        "Restarts": len(restart_gens),
+                        "RestartGens": list(restart_gens),
                     })
                 except Exception as e:
                     print(f"[run_ga] progress_callback error: {e}")
                     ProgressFailed = True
+
+    epoch_bests.append(float(BestCostEver))
 
     full_position = problem["InitialD"].copy()
     full_position[problem["VariablePipes"]] = problem["D"][GlobalSol]

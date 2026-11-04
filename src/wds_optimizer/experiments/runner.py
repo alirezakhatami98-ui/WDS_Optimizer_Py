@@ -1,6 +1,6 @@
 """Multi-run experiment orchestration (mirror of runExperiment.m)."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -24,6 +24,8 @@ class RunRecord:
     # Success | Partial (stopped, best-so-far kept) | Failed | Cancelled | NotStarted
     status: str = "NotStarted"
     error_message: str = ""
+    restart_gens: list = field(default_factory=list)   # 1-based generations
+    epoch_bests: list = field(default_factory=list)    # best cost per epoch
 
 
 @dataclass
@@ -42,6 +44,7 @@ class ExperimentResult:
     fixed_pipes: np.ndarray
     runs: dict = field(default_factory=dict)   # {algo: [RunRecord, ...]}
     cancelled: bool = False                    # True if stopped by the user
+    restart: dict = field(default_factory=dict)  # restart settings used
 
 
 def run_experiment(
@@ -97,6 +100,7 @@ def run_experiment(
         NP=problem["NP"],
         variable_pipes=np.asarray(problem["VariablePipes"]),
         fixed_pipes=np.asarray(problem["FixedPipes"]),
+        restart=_restart_dict(base_config),
     )
 
     for algo in selected:
@@ -120,6 +124,8 @@ def run_experiment(
             cfg.PSO.w = base_config.PSO.w
             cfg.PSO.c1 = base_config.PSO.c1
             cfg.PSO.c2 = base_config.PSO.c2
+            if getattr(base_config, "Restart", None) is not None:
+                cfg.Restart = replace(base_config.Restart)
             cfg.Seed = int(run_seeds[r])
 
             # Wrap the per-gen callback to add run-level context
@@ -133,6 +139,7 @@ def run_experiment(
                     progress_callback(info)
 
             import time
+            meta = {}                      # filled by the algorithm
             t0 = time.perf_counter()
             try:
                 if algo == "GA":
@@ -140,18 +147,22 @@ def run_experiment(
                         problem, cfg,
                         progress_callback=per_run_cb,
                         cancel_callback=cancel_callback,
+                        meta=meta,
                     )
                 else:
                     score, pos, conv, feas = run_pso(
                         problem, cfg,
                         progress_callback=per_run_cb,
                         cancel_callback=cancel_callback,
+                        meta=meta,
                     )
                 dt = time.perf_counter() - t0
                 runs.append(RunRecord(
                     algorithm=algo, run_index=r + 1, seed=int(run_seeds[r]),
                     score=float(score), position=pos, feasible=bool(feas),
                     execution_time=dt, convergence=conv, status="Success",
+                    restart_gens=list(meta.get("restart_gens", [])),
+                    epoch_bests=list(meta.get("epoch_bests", [])),
                 ))
             except (GACancelled, PSOCancelled) as e:
                 # If the algorithm attached its best-so-far
@@ -167,6 +178,8 @@ def run_experiment(
                         execution_time=time.perf_counter() - t0,
                         convergence=p_conv, status="Partial",
                         error_message="Stopped by user; best-so-far kept.",
+                        restart_gens=list(meta.get("restart_gens", [])),
+                        epoch_bests=list(meta.get("epoch_bests", [])),
                     ))
                 else:
                     runs.append(RunRecord(
@@ -197,6 +210,20 @@ def run_experiment(
         for runs in result.runs.values() for r in runs
     )
     return result
+
+
+def _restart_dict(base_config) -> dict:
+    rs = getattr(base_config, "Restart", None)
+    if rs is None:
+        return {"enabled": False}
+    return {
+        "enabled": bool(rs.Enabled),
+        "patience": int(rs.Patience),
+        "max_restarts": int(rs.MaxRestarts),
+        "mode": str(rs.Mode),
+        "keep_best": bool(rs.KeepBest),
+        "perturb_rate": float(rs.PerturbRate),
+    }
 
 
 def summarize_experiment(result: ExperimentResult) -> dict:

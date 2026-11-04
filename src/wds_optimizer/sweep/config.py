@@ -13,6 +13,9 @@ SWEEP_PARAMETERS = {
     "MaxGen":        "Max generations / iterations",
     "NumberOfRuns":  "Runs per algorithm",
     "ExperimentSeed": "Experiment seed",
+    "RestartMax":    "Max restarts per run (0 = restart off)",
+    "RestartPatience": "Restart patience in generations (turns restart on)",
+    "RestartPerturb": "Restart perturbation rate (turns on 'perturb' restart)",
     "Pmin":          "Min pressure (m)",
     "Vmax":          "Max velocity (m/s)",
 }
@@ -52,6 +55,17 @@ def apply_sweep_parameter(base_cfg, problem, param_name, value, n_runs):
         cfg.NS = int(value)
     elif param_name == "MaxGen":
         cfg.MaxGen = int(value)
+    elif param_name == "RestartMax":
+        # 0 gives a no-restart baseline inside the same sweep
+        cfg.Restart.MaxRestarts = int(value)
+        cfg.Restart.Enabled = int(value) > 0
+    elif param_name == "RestartPatience":
+        cfg.Restart.Patience = int(value)
+        cfg.Restart.Enabled = True
+    elif param_name == "RestartPerturb":
+        cfg.Restart.PerturbRate = float(value)
+        cfg.Restart.Mode = "perturb"
+        cfg.Restart.Enabled = True
     elif param_name == "NumberOfRuns":
         n = int(value)
     elif param_name == "Pmin":
