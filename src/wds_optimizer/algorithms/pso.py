@@ -6,7 +6,17 @@ from .compare import is_better_solution
 from ..optimization.evaluate import evaluate_population
 
 class PSOCancelled(Exception):
-    """Raised when PSO is cancelled."""
+    """Raised when PSO is cancelled.
+
+    ``partial`` is ``(score, full_position, convergence, feasible)`` with
+    the best-so-far design, or ``None`` if cancelled before the first
+    iteration finished.  ``convergence`` has length MaxGen, padded with
+    NaN for the iterations that never ran.
+    """
+    def __init__(self, message="PSO execution was cancelled by the user.",
+                 partial=None):
+        super().__init__(message)
+        self.partial = partial
 
 
 def run_pso(problem, config,
@@ -52,8 +62,18 @@ def run_pso(problem, config,
 
     for G in range(MaxGen):
         if cancel_callback is not None and cancel_callback():
-            raise PSOCancelled("PSO execution was cancelled by the user.")
-        
+            partial = None
+            if BestX is not None:            # at least one iteration done
+                pos = problem["InitialD"].copy()
+                pos[problem["VariablePipes"]] = problem["D"][BestX]
+                conv = np.full(MaxGen, np.nan)
+                conv[:G] = Conv[:G]
+                partial = (float(BestCost), pos, conv,
+                           bool(BestViol == 0.0))
+            raise PSOCancelled(
+                "PSO execution was cancelled by the user.", partial=partial
+            )
+
         # MATLAB round() is half-away-from-zero; np.floor(x + 0.5) matches.
         X_discrete = np.clip(
             np.floor(X + 0.5).astype(int), 0, ND - 1

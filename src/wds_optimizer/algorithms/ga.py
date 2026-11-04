@@ -8,7 +8,17 @@ from ..optimization.evaluate import evaluate_population
 from ..optimization.fitness import calculate_fitness
 
 class GACancelled(Exception):
-    """Raised when the GA is cancelled via cancel_callback."""
+    """Raised when the GA is cancelled via cancel_callback.
+
+    ``partial`` is ``(score, full_position, convergence, feasible)`` with
+    the best-so-far design, or ``None`` if cancelled before the first
+    generation finished.  ``convergence`` has length MaxGen, padded with
+    NaN for the generations that never ran.
+    """
+    def __init__(self, message="GA execution was cancelled by the user.",
+                 partial=None):
+        super().__init__(message)
+        self.partial = partial
 
 def run_ga(problem, config,
            progress_callback=None, cancel_callback=None):
@@ -19,7 +29,8 @@ def run_ga(problem, config,
         Algorithm, Generation, MaxGenerations, BestCost, Feasible,
         Convergence (np.ndarray of length G+1)
     cancel_callback : callable() -> bool or None
-        If it returns True, raises ``GACancelled``.
+        If it returns True, raises ``GACancelled`` (carrying the
+        best-so-far result in ``.partial`` when one exists).
 
     Returns
     -------
@@ -58,8 +69,18 @@ def run_ga(problem, config,
     for G in range(MaxGen):
         # ---- cancellation check ----
         if cancel_callback is not None and cancel_callback():
-            raise GACancelled("GA execution was cancelled by the user.")
-        
+            partial = None
+            if GlobalSol is not None:        # at least one generation done
+                pos = problem["InitialD"].copy()
+                pos[problem["VariablePipes"]] = problem["D"][GlobalSol]
+                conv = np.full(MaxGen, np.nan)
+                conv[:G] = Conv[:G]
+                partial = (float(GlobalCost), pos, conv,
+                           bool(GlobalViol == 0.0))
+            raise GACancelled(
+                "GA execution was cancelled by the user.", partial=partial
+            )
+
         # ---- selection ----
         if config.GA.Selection == "tournament":
             sel = selection_tournament(

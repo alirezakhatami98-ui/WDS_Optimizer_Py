@@ -239,6 +239,13 @@ def _build_markdown(*, experiment, summary, best_algo, best_run_index,
     L.append("# WDS Optimizer — Reproducibility Report\n")
     L.append(f"**Generated:** {ts}  ")
     L.append(f"**Experiment ID:** `{experiment.experiment_id}`\n")
+    if getattr(experiment, "cancelled", False):
+        L.append("> **⚠ This experiment was cancelled by the user — "
+                 "results are partial.** Statistics below use only runs "
+                 "that finished (status `Success`). A run stopped midway "
+                 "(status `Partial`) keeps its best-so-far design and may "
+                 "be the best design reported. See `data/runs.csv` for "
+                 "per-run status.\n")
 
     L.append("## Configuration\n")
     L.append(f"- **Network:** {len(pipe_names)} pipes, "
@@ -271,6 +278,7 @@ def _build_markdown(*, experiment, summary, best_algo, best_run_index,
     L.append("## Best design\n")
     L.append(f"- **Algorithm:** {best_algo}")
     L.append(f"- **Run:** {best_run_index}")
+    L.append(f"- **Run status:** {best_run.status}")
     L.append(f"- **Seed:** {best_run.seed}")
     L.append(f"- **Cost:** {best_run.score:.2f}")
     L.append(f"- **Feasible:** {'Yes' if best_run.feasible else 'No'}")
@@ -347,7 +355,7 @@ Contents
                         nodes.csv      Best-design node results
   figures/            Static PNG figures (150 dpi).
 
-Configuration
+{"NOTE: this experiment was CANCELLED by the user; results are partial." + chr(10) if getattr(experiment, "cancelled", False) else ""}Configuration
 -------------
   Algorithms        : {', '.join(experiment.algorithms)}
   Runs per algo     : {experiment.number_of_runs}

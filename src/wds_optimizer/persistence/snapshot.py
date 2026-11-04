@@ -106,6 +106,7 @@ def build_snapshot(
             "experiment_seed": experiment.experiment_seed,
             "NS":              experiment.NS,
             "MaxGen":          experiment.MaxGen,
+            "cancelled":       bool(getattr(experiment, "cancelled", False)),
             "runs": {
                 algo: [_run_to_dict(r) for r in runs]
                 for algo, runs in experiment.runs.items()
@@ -161,6 +162,7 @@ def restore_experiment(data: dict) -> ExperimentResult:
         NP=len(data["problem"]["pipe_names"]),
         variable_pipes=np.array(data["problem"]["VariablePipes"]),
         fixed_pipes=np.array(data["problem"]["FixedPipes"]),
+        cancelled=bool(exp.get("cancelled", False)),   # old files: False
     )
     for algo, runs in exp["runs"].items():
         result.runs[algo] = [_dict_to_run(r) for r in runs]

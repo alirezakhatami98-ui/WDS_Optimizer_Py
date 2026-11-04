@@ -24,6 +24,8 @@ _KEYS = {
     "report_filename": None,
     "network_units":      None,   # dict from detect_network_units
     "network_units_prev": None,   # previous units (for auto-convert on switch)
+    "job":        None,           # BackgroundJob currently running (or None)
+    "job_notice": None,           # (level, message, details) shown once
 }
 
 
@@ -41,4 +43,4 @@ def reset_experiment():
         "hydraulics_converged", "problem_snapshot", "sweep_result",
         "report_zip", "report_filename",
     ):
-        st.session_state[key] = _KEYS[key]
+        st.session_state[key] = _KEYS[key]

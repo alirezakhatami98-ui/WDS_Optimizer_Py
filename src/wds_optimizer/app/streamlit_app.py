@@ -55,6 +55,7 @@ from wds_optimizer.hydraulics.units import (
 from wds_optimizer.optimization.problem import build_optimization_problem
 from wds_optimizer.app.network_map import build_network_figure
 from wds_optimizer.app.state import init_state, reset_experiment
+from wds_optimizer.app.jobs import BackgroundJob
 from wds_optimizer.persistence.snapshot import (
     build_snapshot, load_snapshot, restore_experiment,
 )
@@ -104,7 +105,61 @@ def _get_network_units(inp_path: str):
 #  UI helpers
 # =====================================================================
 
+_BUTTON_CSS = """
+<style>
+/* Start buttons: green */
+.st-key-run_start button, .st-key-sweep_start button {
+    background-color: #2f9e44 !important; border-color: #2b8a3e !important;
+}
+.st-key-run_start button:hover, .st-key-sweep_start button:hover {
+    background-color: #2b8a3e !important;
+}
+/* Cancel buttons: red */
+.st-key-run_stop button, .st-key-sweep_stop button {
+    background-color: #e03131 !important; border-color: #c92a2a !important;
+}
+.st-key-run_stop button:hover, .st-key-sweep_stop button:hover {
+    background-color: #c92a2a !important;
+}
+/* "Stopping..." state: amber */
+.st-key-run_stopping button, .st-key-sweep_stopping button {
+    background-color: #f08c00 !important; border-color: #e67700 !important;
+}
+.st-key-run_start button *, .st-key-sweep_start button *,
+.st-key-run_stop button *,  .st-key-sweep_stop button *,
+.st-key-run_stopping button *, .st-key-sweep_stopping button * {
+    color: #ffffff !important;
+}
+.st-key-run_start button:disabled, .st-key-sweep_start button:disabled {
+    background-color: #adb5bd !important; border-color: #adb5bd !important;
+    opacity: 0.6;
+}
+</style>
+"""
+
+
+def _job_button(kind: str, start_label: str, stop_label: str, *,
+                enabled: bool) -> bool:
+    """Green start button that turns into a red cancel button while its
+    job is running.  Returns True only when START was clicked."""
+    job = st.session_state.get("job")
+    if job is not None and job.kind == kind:
+        if job.cancel_requested:
+            st.button("⏳ Stopping… saving results", key=f"{kind}_stopping",
+                      type="primary", width="stretch", disabled=True)
+        elif st.button(stop_label, key=f"{kind}_stop",
+                       type="primary", width="stretch"):
+            job.cancel()
+            st.rerun()          # redraw immediately in the "Stopping" state
+        return False
+    return st.button(
+        start_label, key=f"{kind}_start", type="primary", width="stretch",
+        disabled=(not enabled) or (job is not None),   # one job at a time
+    )
+
+
 def _header():
+    st.markdown(_BUTTON_CSS, unsafe_allow_html=True)
     st.title("💧 WDS Optimizer")
     st.caption(
         "Water distribution network optimization using GA and PSO, "
@@ -285,16 +340,15 @@ def _render_sidebar():
 
         st.divider()
         can_run = bool(st.session_state.inp_path)
-        run_clicked = st.button(
-            "🚀 Run Experiment",
-            type="primary",
-            width="stretch",
-            disabled=not can_run,
+        busy = st.session_state.get("job") is not None
+        run_clicked = _job_button(
+            "run", "🚀 Run Experiment", "⏹ Cancel experiment",
+            enabled=can_run,
         )
         if not can_run:
             st.caption("Load all three input files to enable.")
         if st.session_state.experiment is not None:
-            if st.button("🗑 Clear results", width="stretch"):
+            if st.button("🗑 Clear results", width="stretch", disabled=busy):
                 reset_experiment()
                 st.rerun()
 
@@ -346,7 +400,8 @@ def _render_sidebar():
             "Load experiment (.json)", type=["json"], key="load_json"
         )
         if load_upload is not None:
-            if st.button("Load selected file", width="stretch"):
+            if st.button("Load selected file", width="stretch",
+                         disabled=busy):
                 try:
                     data = load_snapshot(load_upload)
                     _restore_from_snapshot(data)   # includes st.rerun()
@@ -378,10 +433,11 @@ def _render_sidebar():
                 "Runs per point", 1, 20, value=1, step=1,
                 key="sweep_runs_input",
             )
-            sweep_go = st.button(
-                "🔍 Run sweep", type="secondary", width="stretch",
-                disabled=not st.session_state.inp_path,
-            )
+
+        sweep_go = _job_button(
+            "sweep", "🔍 Run sweep", "⏹ Cancel sweep",
+            enabled=bool(st.session_state.inp_path),
+        )
 
         sweep_config = None
         if sweep_go:
@@ -525,131 +581,251 @@ def _prepare_problem():
 #  Run experiment with live progress
 # =====================================================================
 
-def _execute_run(algo_label: str):
-    # --- Sync sidebar widgets into canonical session_state keys. ---
-    # Only sync widgets that were actually rendered.  When the user
-    # picks "GA" only, the PSO expander is not rendered and its
-    # `*_input` keys do not exist in session_state.
-    def _sync(dst, src):
+def _sync_sidebar_state(with_n_runs: bool = True):
+    """Copy sidebar widget values into the canonical session_state keys.
+
+    Only widgets that were actually rendered exist (e.g. PSO widgets are
+    absent when the user picked "GA" only).
+    """
+    pairs = [
+        ("ns", "ns_input"), ("max_gen", "max_gen_input"),
+        ("pmin", "pmin_input"), ("vmax", "vmax_input"),
+        ("fixed_pipes", "fixed_pipes_input"), ("exp_seed", "exp_seed_input"),
+        ("ga_pc", "ga_pc_input"), ("ga_pm", "ga_pm_input"),
+        ("ga_sel", "ga_sel_input"),
+        ("pso_w", "pso_w_input"), ("pso_c1", "pso_c1_input"),
+        ("pso_c2", "pso_c2_input"),
+    ]
+    if with_n_runs:
+        pairs.append(("n_runs", "n_runs_input"))
+    for dst, src in pairs:
         if src in st.session_state:
             st.session_state[dst] = st.session_state[src]
 
-    _sync("ns",          "ns_input")
-    _sync("max_gen",     "max_gen_input")
-    _sync("pmin",        "pmin_input")
-    _sync("vmax",        "vmax_input")
-    _sync("fixed_pipes", "fixed_pipes_input")
-    _sync("n_runs",      "n_runs_input")
-    _sync("exp_seed",    "exp_seed_input")
-    # GA widgets
-    _sync("ga_pc",       "ga_pc_input")
-    _sync("ga_pm",       "ga_pm_input")
-    _sync("ga_sel",      "ga_sel_input")
-    # PSO widgets
-    _sync("pso_w",       "pso_w_input")
-    _sync("pso_c1",      "pso_c1_input")
-    _sync("pso_c2",      "pso_c2_input")
+
+def _build_base_cfg():
+    cfg = build_algorithm_config(
+        int(st.session_state.ns), int(st.session_state.max_gen)
+    )
+    cfg.GA.Pc = st.session_state.ga_pc
+    cfg.GA.Pm = st.session_state.ga_pm
+    cfg.GA.Selection = st.session_state.ga_sel
+    cfg.PSO.w = st.session_state.pso_w
+    cfg.PSO.c1 = st.session_state.pso_c1
+    cfg.PSO.c2 = st.session_state.pso_c2
+    return cfg
+
+
+# =====================================================================
+#  Background jobs: start -> live panel (fragment) -> finalize
+# =====================================================================
+# The optimisation runs in a worker thread (see app/jobs.py).  The worker
+# never calls st.*; the UI polls the job every 0.5 s from a fragment and,
+# once the thread has ended (normally OR after Cancel), stores whatever
+# result exists and reruns the app.
+
+def _start_run(algo_label: str):
+    _sync_sidebar_state(with_n_runs=True)
 
     # Clear any stale report from a previous experiment
     st.session_state.report_zip = None
     st.session_state.report_filename = None
 
-    with st.status("Preparing problem...", expanded=True) as status:
-        problem, units, wn = _prepare_problem()
+    problem, units, wn = _prepare_problem()
+    base_cfg = _build_base_cfg()
+    algos = {"GA": ["GA"], "PSO": ["PSO"]}.get(algo_label, ["GA", "PSO"])
+    n_runs = int(st.session_state.n_runs)
+    seed = int(st.session_state.exp_seed)
 
-        st.write(
-            f"Network: **{len(problem['pipe_names'])}** pipes, "
-            f"**{len(problem['junction_names'])}** junctions, "
-            f"**{len(problem['VariablePipes'])}** variable, "
-            f"**{len(problem['FixedPipes'])}** fixed."
-        )
-        st.write(
-            f"Diameters: **{len(problem['D'])}** options "
-            f"({problem['D'][0] * 1000:.1f} – "
-            f"{problem['D'][-1] * 1000:.1f} mm)"
-        )
-        st.write(f"Units: {units['FlowUnit']} / {units['System']}")
+    summary = (
+        f"Network: **{len(problem['pipe_names'])}** pipes, "
+        f"**{len(problem['junction_names'])}** junctions, "
+        f"**{len(problem['VariablePipes'])}** variable, "
+        f"**{len(problem['FixedPipes'])}** fixed  |  "
+        f"Algorithms: **{', '.join(algos)}** × **{n_runs}** runs, "
+        f"NS={st.session_state.ns}, MaxGen={st.session_state.max_gen}"
+    )
 
-        # Algorithm config — use CANONICAL keys after sync.
-        base_cfg = build_algorithm_config(
-            int(st.session_state.ns), int(st.session_state.max_gen)
+    def target(progress_cb, cancel_cb):
+        return run_experiment(
+            problem, base_cfg,
+            number_of_runs=n_runs,
+            algorithms=algos,
+            experiment_seed=seed,
+            progress_callback=progress_cb,
+            cancel_callback=cancel_cb,
         )
-        base_cfg.GA.Pc        = st.session_state.ga_pc
-        base_cfg.GA.Pm        = st.session_state.ga_pm
-        base_cfg.GA.Selection = st.session_state.ga_sel
-        base_cfg.PSO.w        = st.session_state.pso_w
-        base_cfg.PSO.c1       = st.session_state.pso_c1
-        base_cfg.PSO.c2       = st.session_state.pso_c2
 
-        if algo_label == "GA":
-            algos = ["GA"]
-        elif algo_label == "PSO":
-            algos = ["PSO"]
+    job = BackgroundJob(
+        "run", label="Experiment",
+        context={"problem": problem, "units": units, "wn": wn,
+                 "algos": algos, "n_runs": n_runs, "summary": summary},
+    )
+    job.start(target)
+    st.session_state.job = job
+    st.session_state.job_notice = None
+    st.rerun()      # redraw sidebar: green button -> red "Cancel"
+
+
+def _start_sweep(param_name, values, algorithms, n_runs):
+    _sync_sidebar_state(with_n_runs=False)
+
+    problem, units, wn = _prepare_problem()
+    base_cfg = _build_base_cfg()
+    seed = int(st.session_state.exp_seed)
+    label = _sweep_param_label(param_name, units)
+
+    def target(progress_cb, cancel_cb):
+        return run_parameter_sweep(
+            problem, base_cfg,
+            parameter_name=param_name,
+            values=values,
+            algorithms=algorithms,
+            n_runs=int(n_runs),
+            experiment_seed=seed,
+            progress_callback=progress_cb,
+            cancel_callback=cancel_cb,
+        )
+
+    job = BackgroundJob(
+        "sweep", label=f"Sweep: {label}",
+        context={"param_name": param_name, "values": list(values),
+                 "algorithms": list(algorithms), "n_runs": int(n_runs),
+                 "summary": (f"Sweeping **{label}** over **{len(values)}** "
+                             f"values: `{list(values)}` | Algorithms: "
+                             f"**{', '.join(algorithms)}**, runs/point: "
+                             f"**{n_runs}**, seed: **{seed}**")},
+    )
+    job.start(target)
+    st.session_state.job = job
+    st.session_state.job_notice = None
+    st.rerun()
+
+
+@st.fragment(run_every=0.5)
+def _job_panel():
+    """Live progress while a job runs; finalises it when the thread ends."""
+    job = st.session_state.get("job")
+    if job is None:
+        return
+    job.touch()                       # heartbeat (see BackgroundJob)
+
+    if job.is_done:
+        if job.kind == "run":
+            _finalize_run(job)
         else:
-            algos = ["GA", "PSO"]
+            _finalize_sweep(job)
+        return                        # (finalize ends with st.rerun)
 
-        st.write(
-            f"Algorithms: **{', '.join(algos)}** × "
-            f"**{st.session_state.n_runs}** runs, "
-            f"NS={st.session_state.ns}, "
-            f"MaxGen={st.session_state.max_gen}"
-        )
-        status.update(label="Running...", state="running")
-
-    # ---- Live progress widgets ----
+    ctx = job.context
+    prog = job.get_progress()
     st.subheader("Live progress")
-    progress_bar = st.progress(0.0)
-    status_line = st.empty()
-    chart_placeholder = st.empty()
+    st.markdown(ctx.get("summary", ""))
 
-    def progress_cb(info):
-        gen = info["Generation"]
-        maxg = info["MaxGenerations"]
-        progress_bar.progress(min(1.0, gen / maxg))
-        feas_txt = "Feasible" if info["Feasible"] else "Infeasible"
-        status_line.info(
-            f"**{info['RunLabel']}** | Gen **{gen}/{maxg}** | "
-            f"Best cost: **{info['BestCost']:,.0f}** | {feas_txt}"
+    if job.cancel_requested:
+        st.warning(
+            "Stopping after the current step — results computed so far "
+            "will be kept."
         )
-        conv = info["Convergence"]
-        color = "#d9480f" if info["Algorithm"] == "GA" else "#1971c2"
+
+    if job.kind == "run":
+        algos, n_runs = ctx["algos"], ctx["n_runs"]
+        if "Generation" not in prog:
+            st.progress(0.0)
+            st.caption("Starting…")
+            return
+        a_idx = algos.index(prog["Algorithm"]) if prog["Algorithm"] in algos else 0
+        gen_frac = min(1.0, prog["Generation"] / max(prog["MaxGenerations"], 1))
+        frac = (a_idx * n_runs + (prog["RunIndex"] - 1) + gen_frac) / (
+            len(algos) * n_runs
+        )
+        st.progress(min(1.0, frac))
+        feas = "Feasible" if prog["Feasible"] else "Infeasible"
+        st.info(
+            f"**{prog['RunLabel']}** | Gen **{prog['Generation']}/"
+            f"{prog['MaxGenerations']}** | Best cost: "
+            f"**{prog['BestCost']:,.0f}** | {feas} | "
+            f"elapsed {job.elapsed:.0f} s"
+        )
+        conv = prog["Convergence"]
+        color = "#d9480f" if prog["Algorithm"] == "GA" else "#1971c2"
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=np.arange(1, len(conv) + 1), y=conv,
-            mode="lines", line=dict(color=color, width=2),
-            name=info["RunLabel"],
+            x=np.arange(1, len(conv) + 1), y=conv, mode="lines",
+            line=dict(color=color, width=2), name=prog["RunLabel"],
         ))
         fig.update_layout(
             height=280, margin=dict(l=20, r=20, t=30, b=20),
-            xaxis_title="Generation / Iteration",
-            yaxis_title="Best cost",
+            xaxis_title="Generation / Iteration", yaxis_title="Best cost",
             showlegend=False,
         )
-        chart_placeholder.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch")
 
-    t0 = time.perf_counter()
-    result: ExperimentResult = run_experiment(
-        problem, base_cfg,
-        number_of_runs=int(st.session_state.n_runs),
-        algorithms=algos,
-        experiment_seed=int(st.session_state.exp_seed),
-        progress_callback=progress_cb,
-    )
-    elapsed = time.perf_counter() - t0
-    progress_bar.progress(1.0)
-    status_line.success(f"Experiment finished in {elapsed:.1f} s")
+    else:  # sweep
+        total = prog.get("TotalPoints", len(ctx["values"]))
+        pi = prog.get("PointIndex", 1)
+        inner = prog.get("ProgressInfo") or {}
+        frac_in_point = 0.0
+        if inner.get("Generation"):
+            n_alg = max(len(ctx["algorithms"]), 1)
+            a_idx = (ctx["algorithms"].index(inner["Algorithm"])
+                     if inner.get("Algorithm") in ctx["algorithms"] else 0)
+            gen_frac = inner["Generation"] / max(inner["MaxGenerations"], 1)
+            frac_in_point = (
+                a_idx * ctx["n_runs"] + (inner.get("RunIndex", 1) - 1)
+                + gen_frac
+            ) / (n_alg * ctx["n_runs"])
+        if prog.get("Phase") == "PointDone":
+            frac_in_point = 1.0
+        st.progress(min(1.0, ((pi - 1) + frac_in_point) / max(total, 1)))
+        if "ParameterValue" in prog:
+            st.info(
+                f"Point **{pi}/{total}** | {ctx['param_name']} = "
+                f"**{prog['ParameterValue']:g}** | "
+                f"elapsed {job.elapsed:.0f} s"
+            )
+        else:
+            st.caption("Starting…")
 
-    # ---- Pick best run and compute final hydraulics ----
+
+def _notice(level: str, msg: str, details: str = ""):
+    st.session_state.job_notice = (level, msg, details)
+
+
+def _finalize_run(job: BackgroundJob):
+    """Runs in the main script thread after the worker has ended."""
+    ctx = job.context
+    st.session_state.job = None
+    elapsed = job.elapsed
+
+    if job.error is not None:
+        _notice("error",
+                f"Experiment failed: {type(job.error).__name__}: {job.error}",
+                job.error_trace)
+        st.rerun()
+
+    result: ExperimentResult = job.result
+    problem, units, wn = ctx["problem"], ctx["units"], ctx["wn"]
+    cancelled = bool(getattr(result, "cancelled", False))
+
     best_record, best_algo = _pick_best_run(result)
     if best_record is None:
-        st.error("No successful run. Check the All Runs tab for details.")
-        return
+        errs = [r.error_message for rs in result.runs.values() for r in rs
+                if r.status == "Failed" and r.error_message]
+        if cancelled:
+            _notice("warning",
+                    f"Cancelled after {elapsed:.0f} s, before any run "
+                    "produced a design — nothing to show.")
+        else:
+            _notice("error",
+                    "No successful run." + (f" First error: {errs[0]}"
+                                            if errs else ""))
+        st.rerun()
 
     full_D = problem["InitialD"].copy()
     full_D[problem["VariablePipes"]] = problem["D"][
         _position_to_indices(best_record.position, problem)
     ]
-
     Pj, Vp, conv_ok = run_hydraulic_simulation(
         wn, full_D, problem["pipe_names"], problem["junction_names"]
     )
@@ -680,7 +856,58 @@ def _execute_run(algo_label: str):
         "Units": dict(units),
     }
 
+    runs_all = [r for rs in result.runs.values() for r in rs]
+    n_ok = sum(r.status == "Success" for r in runs_all)
+    n_part = sum(r.status == "Partial" for r in runs_all)
+    if cancelled:
+        _notice("warning",
+                f"Experiment cancelled after {elapsed:.0f} s. Kept {n_ok} "
+                f"completed run(s)" + (f" + {n_part} partial run(s)"
+                                       if n_part else "")
+                + f" out of {len(runs_all)}. The results below are partial.")
+    else:
+        _notice("success", f"Experiment finished in {elapsed:.1f} s")
     st.rerun()
+
+
+def _finalize_sweep(job: BackgroundJob):
+    st.session_state.job = None
+
+    if job.error is not None:
+        _notice("error",
+                f"Sweep failed: {type(job.error).__name__}: {job.error}",
+                job.error_trace)
+        st.rerun()
+
+    result = job.result
+    n_pts, n_all = len(result.points), len(result.values)
+    if n_pts:
+        st.session_state.sweep_result = result
+    if result.cancelled:
+        if n_pts:
+            _notice("warning",
+                    f"Sweep cancelled after {job.elapsed:.0f} s — "
+                    f"{n_pts} of {n_all} points kept (see the Sweep tab).")
+        else:
+            _notice("warning", "Sweep cancelled before any point finished.")
+    else:
+        _notice("success", f"Sweep complete ({n_pts} points, "
+                           f"{job.elapsed:.1f} s). See the Sweep tab.")
+    st.rerun()
+
+
+def _show_job_notice():
+    notice = st.session_state.get("job_notice")
+    if not notice:
+        return
+    level, msg, details = notice
+    {"success": st.success, "warning": st.warning,
+     "error": st.error}.get(level, st.info)(msg)
+    if details:
+        with st.expander("Details"):
+            st.code(details)
+
+
 
 def _restore_from_snapshot(data: dict):
     """Restore session_state from a loaded snapshot dict.
@@ -798,86 +1025,6 @@ def _restore_from_snapshot(data: dict):
 
     st.rerun()
 
-def _execute_sweep(param_name, values, algorithms, n_runs):
-    # Sync sidebar widgets
-    def _sync(dst, src):
-        if src in st.session_state:
-            st.session_state[dst] = st.session_state[src]
-    _sync("ns",          "ns_input")
-    _sync("max_gen",     "max_gen_input")
-    _sync("pmin",        "pmin_input")
-    _sync("vmax",        "vmax_input")
-    _sync("fixed_pipes", "fixed_pipes_input")
-    _sync("exp_seed",    "exp_seed_input")
-    _sync("ga_pc",       "ga_pc_input")
-    _sync("ga_pm",       "ga_pm_input")
-    _sync("ga_sel",      "ga_sel_input")
-    _sync("pso_w",       "pso_w_input")
-    _sync("pso_c1",      "pso_c1_input")
-    _sync("pso_c2",      "pso_c2_input")
-
-    _units_pre = st.session_state.get("network_units")
-    with st.status(
-        f"Sweeping {_sweep_param_label(param_name, _units_pre)}...",
-        expanded=True,
-    ) as status:
-        problem, units, wn = _prepare_problem()
-        base_cfg = build_algorithm_config(
-            int(st.session_state.ns), int(st.session_state.max_gen)
-        )
-        base_cfg.GA.Pc = st.session_state.ga_pc
-        base_cfg.GA.Pm = st.session_state.ga_pm
-        base_cfg.GA.Selection = st.session_state.ga_sel
-        base_cfg.PSO.w = st.session_state.pso_w
-        base_cfg.PSO.c1 = st.session_state.pso_c1
-        base_cfg.PSO.c2 = st.session_state.pso_c2
-
-        st.write(
-            f"Sweeping **{_sweep_param_label(param_name, units)}** "
-            f"over **{len(values)}** values: `{values}`"
-        )
-        st.write(
-            f"Algorithms: **{', '.join(algorithms)}**, "
-            f"runs/point: **{n_runs}**, seed: **{st.session_state.exp_seed}**"
-        )
-        status.update(label="Running sweep...", state="running")
-
-        progress_bar = st.progress(0.0)
-        point_line = st.empty()
-
-        def cb(info):
-            phase = info.get("Phase")
-            if phase == "StartingPoint":
-                point_line.info(
-                    f"Point **{info['PointIndex']}/{info['TotalPoints']}** "
-                    f"| {param_name} = **{info['ParameterValue']:g}**"
-                )
-            elif phase == "RunProgress":
-                pi = info["ProgressInfo"]
-                frac = (
-                    (info["PointIndex"] - 1)
-                    + pi["Generation"] / pi["MaxGenerations"]
-                ) / info["TotalPoints"]
-                progress_bar.progress(min(1.0, frac))
-            elif phase == "PointDone":
-                progress_bar.progress(
-                    info["PointIndex"] / info["TotalPoints"]
-                )
-
-        result = run_parameter_sweep(
-            problem, base_cfg,
-            parameter_name=param_name,
-            values=values,
-            algorithms=algorithms,
-            n_runs=int(n_runs),
-            experiment_seed=int(st.session_state.exp_seed),
-            progress_callback=cb,
-        )
-        st.session_state.sweep_result = result
-        status.update(label="Sweep complete", state="complete")
-
-    st.rerun()
-
 def _render_sweep_tab():
     result = st.session_state.get("sweep_result")
     if result is None:
@@ -899,6 +1046,13 @@ def _render_sweep_tab():
     else:
         value_header = "Value"
 
+    if getattr(result, "cancelled", False):
+        st.warning(
+            f"Sweep cancelled: {len(result.points)} of "
+            f"{len(result.values)} points were reached. Points marked "
+            "“Partial” used fewer runs than requested."
+        )
+
     rows = []
     for p in result.points:
         rows.append({
@@ -917,15 +1071,17 @@ def _render_sweep_tab():
     df = pd.DataFrame(rows)
     st.dataframe(df, width="stretch", hide_index=True)
 
-    # Trend chart
-    xs = [p.value for p in result.points]
+    # Trend chart (complete points only; partial ones are in the table)
+    plot_pts = [p for p in result.points
+                if p.status in ("Success", "AllInfeasible")]
+    xs = [p.value for p in plot_pts]
     ys = [
         p.mean_score if np.isfinite(p.mean_score) else np.nan
-        for p in result.points
+        for p in plot_pts
     ]
     bests = [
         p.best_score if np.isfinite(p.best_score) else np.nan
-        for p in result.points
+        for p in plot_pts
     ]
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -1114,7 +1270,7 @@ def _pick_best_run(result: ExperimentResult):
     best_algo = None
     for algo, runs in result.runs.items():
         for r in runs:
-            if r.status != "Success":
+            if r.status not in ("Success", "Partial"):
                 continue
             if best_record is None:
                 best_record, best_algo = r, algo
@@ -1144,6 +1300,13 @@ def _render_summary_tab():
     if result is None:
         st.info("Run an experiment to see the summary here.")
         return
+
+    if getattr(result, "cancelled", False):
+        st.warning(
+            "This experiment was cancelled — results are partial. "
+            "Statistics use only runs that finished; a run stopped midway "
+            "(status “Partial”) can still be the best design."
+        )
 
     summary = summarize_experiment(result)
     rows = []
@@ -1513,17 +1676,21 @@ def main():
 
     if actions["run_clicked"]:
         try:
-            _execute_run(actions["algo_label"])
+            _start_run(actions["algo_label"])
         except Exception as e:
-            st.error(f"Experiment failed: {type(e).__name__}: {e}")
+            st.error(f"Could not start experiment: {type(e).__name__}: {e}")
             st.exception(e)
 
     if actions["sweep"] is not None:
         try:
-            _execute_sweep(**actions["sweep"])
+            _start_sweep(**actions["sweep"])
         except Exception as e:
-            st.error(f"Sweep failed: {type(e).__name__}: {e}")
+            st.error(f"Could not start sweep: {type(e).__name__}: {e}")
             st.exception(e)
+
+    _show_job_notice()
+    if st.session_state.get("job") is not None:
+        _job_panel()
 
     tabs = st.tabs([
         "📊 Summary",
@@ -1551,4 +1718,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()

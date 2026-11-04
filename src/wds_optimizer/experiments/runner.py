@@ -21,7 +21,8 @@ class RunRecord:
     feasible: bool = False
     execution_time: float = float("nan")
     convergence: Optional[np.ndarray] = None
-    status: str = "NotStarted"   # Success | Failed | Cancelled | NotStarted
+    # Success | Partial (stopped, best-so-far kept) | Failed | Cancelled | NotStarted
+    status: str = "NotStarted"
     error_message: str = ""
 
 
@@ -40,6 +41,7 @@ class ExperimentResult:
     variable_pipes: np.ndarray
     fixed_pipes: np.ndarray
     runs: dict = field(default_factory=dict)   # {algo: [RunRecord, ...]}
+    cancelled: bool = False                    # True if stopped by the user
 
 
 def run_experiment(
@@ -152,10 +154,26 @@ def run_experiment(
                     execution_time=dt, convergence=conv, status="Success",
                 ))
             except (GACancelled, PSOCancelled) as e:
-                runs.append(RunRecord(
-                    algorithm=algo, run_index=r + 1, seed=int(run_seeds[r]),
-                    status="Cancelled", error_message=str(e),
-                ))
+                # If the algorithm attached its best-so-far
+                # (score, position, convergence, feasible) keep it.
+                partial = getattr(e, "partial", None)
+                if partial is not None:
+                    p_score, p_pos, p_conv, p_feas = partial
+                    runs.append(RunRecord(
+                        algorithm=algo, run_index=r + 1,
+                        seed=int(run_seeds[r]),
+                        score=float(p_score), position=p_pos,
+                        feasible=bool(p_feas),
+                        execution_time=time.perf_counter() - t0,
+                        convergence=p_conv, status="Partial",
+                        error_message="Stopped by user; best-so-far kept.",
+                    ))
+                else:
+                    runs.append(RunRecord(
+                        algorithm=algo, run_index=r + 1,
+                        seed=int(run_seeds[r]),
+                        status="Cancelled", error_message=str(e),
+                    ))
                 break
             except Exception as e:
                 runs.append(RunRecord(
@@ -174,6 +192,10 @@ def run_experiment(
 
         result.runs[algo] = runs
 
+    result.cancelled = any(
+        r.status in ("Cancelled", "NotStarted", "Partial")
+        for runs in result.runs.values() for r in runs
+    )
     return result
 
 

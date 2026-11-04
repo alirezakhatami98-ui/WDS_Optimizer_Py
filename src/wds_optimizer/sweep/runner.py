@@ -31,6 +31,7 @@ class SweepResult:
     algorithms: list = field(default_factory=list)
     n_runs: int = 1
     experiment_seed: int = 1
+    cancelled: bool = False          # stopped by the user before the end
 
 
 def run_parameter_sweep(
@@ -46,9 +47,11 @@ def run_parameter_sweep(
 ) -> SweepResult:
     points = []
     n_total = len(values)
+    cancelled = False
 
     for i, v in enumerate(values):
         if cancel_callback and cancel_callback():
+            cancelled = True
             break
 
         cfg, prob, n = apply_sweep_parameter(
@@ -116,9 +119,21 @@ def run_parameter_sweep(
         feas_pct = 100.0 * n_feas / max(n_total_runs, 1)
         mean_t = float(np.mean(times)) if times else 0.0
 
+        # A point interrupted by Cancel has fewer runs than requested:
+        # keep it, but flag it so it is not mistaken for a complete point.
+        point_incomplete = bool(exp.cancelled) or (
+            n_total_runs < n * len(exp.algorithms)
+            and cancel_callback is not None and cancel_callback()
+        )
+        if point_incomplete:
+            cancelled = True
+            status = "Partial" if n_total_runs > 0 else "Cancelled"
+        else:
+            status = "Success" if costs else "AllInfeasible"
+
         points.append(SweepPoint(
             value=float(v),
-            status="Success" if costs else "AllInfeasible",
+            status=status,
             best_score=best, mean_score=mean, std_score=std,
             feasible_pct=feas_pct, mean_time=mean_t,
             experiment=exp,
@@ -133,6 +148,9 @@ def run_parameter_sweep(
                 "BestFeasible": bool(costs),
             })
 
+        if cancelled:
+            break
+
     return SweepResult(
         parameter=parameter_name,
         values=list(values),
@@ -140,4 +158,5 @@ def run_parameter_sweep(
         algorithms=list(algorithms),
         n_runs=n_runs,
         experiment_seed=experiment_seed,
+        cancelled=cancelled,
     )
