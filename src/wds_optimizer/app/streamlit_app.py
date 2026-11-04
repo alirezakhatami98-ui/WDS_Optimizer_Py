@@ -56,6 +56,7 @@ from wds_optimizer.optimization.problem import build_optimization_problem
 from wds_optimizer.app.network_map import build_network_figure
 from wds_optimizer.app.state import init_state, reset_experiment
 from wds_optimizer.app.jobs import BackgroundJob
+from wds_optimizer.analysis import stats as st_
 from wds_optimizer.persistence.snapshot import (
     build_snapshot, load_snapshot, restore_experiment,
 )
@@ -541,6 +542,11 @@ def _render_sidebar():
                         "rs_enabled", "rs_patience", "rs_max",
                         "rs_keep_best", "rs_mode", "rs_perturb",
                             )},
+                            reference_cost=(
+                                float(st.session_state.get(
+                                    "ref_cost_input") or 0.0) or None),
+                            success_tol_pct=float(st.session_state.get(
+                                "ref_tol_input", 1.0)),
                         )
                         st.session_state.report_zip = zip_bytes
                         st.session_state.report_filename = (
@@ -831,6 +837,7 @@ def _job_panel():
             f"**{prog['RunLabel']}** | Gen **{prog['Generation']}/"
             f"{prog['MaxGenerations']}** | Best cost: "
             f"**{prog['BestCost']:,.0f}** | {feas} | "
+            + f"NFE: **{prog.get('NFE', 0):,}** | "
             + (f"Restarts: **{prog.get('Restarts', 0)}** | "
                if ctx.get("restart_on") else "")
             + f"elapsed {job.elapsed:.0f} s"
@@ -1201,6 +1208,8 @@ def _render_sweep_tab():
     )
     st.plotly_chart(fig, width="stretch")
 
+    _render_sweep_stats(result)
+
     # CSV export
     csv = df.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
@@ -1365,6 +1374,9 @@ def _render_compare_tab():
     )
     st.plotly_chart(fig, width="stretch")
 
+    _render_stat_compare(exp_a, exp_b)
+
+
 def _pick_best_run(result: ExperimentResult):
     """Select the best successful run (feasible first, then cost)."""
     best_record = None
@@ -1421,6 +1433,10 @@ def _render_summary_tab():
             "Std": f"{s['std']:,.0f}" if np.isfinite(s["std"]) else "—",
             "Best (feasible)": (
                 f"{s['best']:,.0f}" if np.isfinite(s["best"]) else "—"
+            ),
+            "NFE per run": (
+                f"{s['nfe_mean']:,.0f}" if np.isfinite(s["nfe_mean"])
+                else "—"
             ),
         })
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
@@ -1479,6 +1495,173 @@ def _render_summary_tab():
         fig.update_layout(height=350, showlegend=False,
                           margin=dict(l=20, r=20, t=20, b=20))
         st.plotly_chart(fig, width="stretch")
+
+
+def _stats_table(df, index_col):
+    """Show a wide stats table with metrics as rows (easier to read)."""
+    st.dataframe(df.set_index(index_col).T, width="stretch")
+
+
+def _render_statistics_tab():
+    st.subheader("Statistical analysis")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.number_input(
+            "Best-known (reference) cost — optional",
+            min_value=0.0, value=0.0, step=1000.0, format="%.2f",
+            key="ref_cost_input",
+            help="Literature or best-known optimum for this network. "
+                 "Enables gap-to-reference and success-rate statistics. "
+                 "0 = not used.",
+        )
+    with c2:
+        st.number_input(
+            "Success tolerance (% above reference)",
+            min_value=0.0, max_value=100.0, value=1.0, step=0.5,
+            key="ref_tol_input",
+            help="A run counts as a success if it is feasible and its cost "
+                 "is within this percentage of the reference cost.",
+        )
+
+    result: ExperimentResult | None = st.session_state.experiment
+    if result is None:
+        st.info("Run an experiment to see statistics here.")
+        return
+
+    ref = float(st.session_state.get("ref_cost_input") or 0.0) or None
+    tol = float(st.session_state.get("ref_tol_input", 1.0))
+    analysis = st_.analyze_experiment(result, ref, tol)
+
+    for note in analysis["notes"]:
+        st.warning(note)
+
+    st.markdown("### Descriptive statistics")
+    _stats_table(st_.descriptive_dataframe(analysis), "Algorithm")
+    st.caption(
+        "Cost statistics use finished, feasible runs only. "
+        "CI = 95% confidence interval; CV = coefficient of variation; "
+        "Shapiro p < 0.05 suggests non-normal costs, so rank-based tests "
+        "are used below."
+    )
+
+    if analysis["pairwise"]:
+        st.markdown("### Comparison between algorithms")
+        _stats_table(st_.tests_dataframe(analysis["pairwise"]), "Comparison")
+        for r in analysis["pairwise"]:
+            st.markdown(f"**{r['verdict']}**")
+        for f in analysis["feasibility"]:
+            st.caption(
+                f"Feasibility rate — {f['x']}: {f['rate_x']:.0f}%, "
+                f"{f['y']}: {f['rate_y']:.0f}% "
+                f"(Fisher exact p = {st_.fmt_p(f['p'])})."
+            )
+
+    # ---- ECDF of final costs ----
+    st.markdown("### Empirical distribution of final costs")
+    colors = {"GA": "#d9480f", "PSO": "#1971c2"}
+    fig = go.Figure()
+    for algo, runs in result.runs.items():
+        c = np.sort(st_.feasible_costs(runs))
+        if c.size:
+            fig.add_trace(go.Scatter(
+                x=c, y=np.arange(1, c.size + 1) / c.size, mode="lines",
+                line=dict(shape="hv", color=colors.get(algo, "gray"),
+                          width=2),
+                name=algo,
+            ))
+    if ref:
+        fig.add_vline(x=ref, line_dash="dot", line_color="gray",
+                      annotation_text="reference")
+    fig.update_layout(
+        height=330, xaxis_title="Final cost (feasible runs)",
+        yaxis_title="Fraction of runs ≤ cost",
+        margin=dict(l=20, r=20, t=20, b=20),
+    )
+    st.plotly_chart(fig, width="stretch")
+    st.caption("A curve further LEFT / above means cheaper results.")
+
+    with st.expander("Methods and references (for your paper)"):
+        st.write(st_.methods_text(analysis["alpha"]))
+        for r in st_.REFERENCES:
+            st.markdown(f"- {r}")
+        st.caption("Please verify the references before citing.")
+
+
+def _render_stat_compare(exp_a, exp_b):
+    """Statistical comparison of two saved experiments (Compare tab)."""
+    st.markdown("### Statistical comparison (A vs B)")
+    common = sorted(set(exp_a.runs) & set(exp_b.runs))
+    if not common:
+        return
+    rows = [
+        st_.compare_samples(
+            st_.feasible_costs(exp_a.runs[a]),
+            st_.feasible_costs(exp_b.runs[a]), f"A/{a}", f"B/{a}")
+        for a in common
+    ]
+    st_.adjust_and_explain(rows)
+    _stats_table(st_.tests_dataframe(rows), "Comparison")
+    for r in rows:
+        st.markdown(f"**{r['verdict']}**")
+    for a in common:
+        f = st_.compare_feasibility(exp_a.runs[a], exp_b.runs[a])
+        st.caption(
+            f"{a} feasibility — A: {f['rate_x']:.0f}%, B: "
+            f"{f['rate_y']:.0f}% (Fisher exact p = {st_.fmt_p(f['p'])})."
+        )
+    st.caption(
+        "Mann-Whitney U on feasible final costs; A12 = probability that "
+        "an A run is cheaper than a B run (ties count half). p-values are "
+        "Holm-adjusted across algorithms."
+    )
+
+
+def _render_sweep_stats(result):
+    """Kruskal-Wallis + pairwise-vs-reference for a finished sweep."""
+    st.markdown("### Statistical test across sweep values")
+    pts = [p for p in result.points
+           if p.experiment is not None
+           and p.status in ("Success", "AllInfeasible")]
+    if len(pts) < 2:
+        st.info("At least two completed sweep points are needed.")
+        return
+    if result.n_runs < 5:
+        st.warning(
+            f"Only {result.n_runs} runs per point: tests cannot reach "
+            "significance with so few runs. Use ≥ 5 (ideally 20–30)."
+        )
+    labels = [f"{p.value:g}" for p in pts]
+    for algo in result.algorithms:
+        groups = {
+            f"{p.value:g}": st_.feasible_costs(p.experiment.runs.get(algo, []))
+            for p in pts
+        }
+        ref_label = st.selectbox(
+            f"{algo}: reference value", labels, index=0,
+            key=f"sweep_ref_{algo}",
+        )
+        sa = st_.sweep_analysis(groups, ref_label)
+        kw = sa["kruskal"]
+        if np.isfinite(kw["p"]):
+            msg = (f"**{algo}** — Kruskal-Wallis across all values: "
+                   f"p = {st_.fmt_p(kw['p'])}"
+                   + (f" (H = {kw['H']:.2f})" if np.isfinite(kw["H"]) else "")
+                   + (" → the parameter has a significant effect."
+                      if kw["p"] < st_.ALPHA else
+                      " → no significant effect detected."))
+        else:
+            msg = f"**{algo}** — Kruskal-Wallis: {kw['note']}"
+        st.markdown(msg)
+        if sa["vs_reference"]:
+            _stats_table(st_.tests_dataframe(sa["vs_reference"]),
+                         "Comparison")
+            with st.expander(f"{algo}: interpretation"):
+                for r in sa["vs_reference"]:
+                    st.markdown(f"- {r['verdict']}")
+    st.caption(
+        "Pairwise Mann-Whitney tests against the chosen reference value, "
+        "Holm-adjusted. Only completed points are included."
+    )
 
 
 def _render_best_design_tab():
@@ -1695,6 +1878,9 @@ def _render_all_runs_tab():
                 "Run": r.run_index,
                 "Seed": r.seed,
                 "Status": r.status,
+                "NFE": getattr(r, "nfe", 0) or None,
+                "Simulations": getattr(r, "n_sim", 0) or None,
+                "NFE to best": getattr(r, "nfe_to_best", 0) or None,
                 "Restarts": len(getattr(r, "restart_gens", [])),
                 "Epoch bests": " | ".join(
                     f"{c:,.0f}" if np.isfinite(c) else "–"
@@ -1759,6 +1945,9 @@ def _build_excel_export(result: ExperimentResult) -> bytes:
                     "Run": r.run_index, "Seed": r.seed, "Status": r.status,
                     "Cost": r.score, "Feasible": r.feasible,
                     "Time (s)": r.execution_time,
+                    "NFE": getattr(r, "nfe", 0),
+                    "Hydraulic simulations": getattr(r, "n_sim", 0),
+                    "NFE to best": getattr(r, "nfe_to_best", 0),
                     "Error": r.error_message,
                 } for r in runs]
                 pd.DataFrame(rows).to_excel(
@@ -1800,6 +1989,7 @@ def main():
 
     tabs = st.tabs([
         "📊 Summary",
+        "📈 Statistics",
         "🏗 Best Design",
         "💧 Hydraulics",
         "🗺 Network Map",
@@ -1810,16 +2000,18 @@ def main():
     with tabs[0]:
         _render_summary_tab()
     with tabs[1]:
-        _render_best_design_tab()
+        _render_statistics_tab()
     with tabs[2]:
-        _render_hydraulics_tab()
+        _render_best_design_tab()
     with tabs[3]:
-        _render_map_tab()
+        _render_hydraulics_tab()
     with tabs[4]:
-        _render_all_runs_tab()
+        _render_map_tab()
     with tabs[5]:
-        _render_sweep_tab()
+        _render_all_runs_tab()
     with tabs[6]:
+        _render_sweep_tab()
+    with tabs[7]:
         _render_compare_tab()
 
 

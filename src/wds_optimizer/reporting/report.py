@@ -19,6 +19,7 @@ from .figures import (
     make_pressure_png,
     make_velocity_png,
 )
+from ..analysis import stats as st_
 from ..experiments.runner import summarize_experiment
 from ..persistence.snapshot import build_snapshot
 from ..hydraulics.units import (
@@ -35,6 +36,8 @@ def build_report_zip(
     hydraulics_converged,
     config,
     include_inputs=True,
+    reference_cost=None,
+    success_tol_pct=1.0,
 ) -> bytes:
     """Build a complete reproducibility ZIP in memory."""
     buf = io.BytesIO()
@@ -106,6 +109,20 @@ def build_report_zip(
         print(f"[build_report_zip] snapshot error: {e}")
         experiment_json = b"{}"
 
+    # ---- Statistics ----
+    try:
+        analysis = st_.analyze_experiment(
+            experiment, reference_cost, success_tol_pct)
+        stats_desc_csv = _to_csv(
+            st_.descriptive_dataframe(analysis, formatted=False)
+            .to_dict("records"))
+        stats_tests_csv = _to_csv(
+            st_.tests_dataframe(analysis["pairwise"], formatted=False)
+            .to_dict("records"))
+    except Exception as e:
+        print(f"[build_report_zip] statistics error: {e}")
+        analysis, stats_desc_csv, stats_tests_csv = None, "", ""
+
     # ---- CSVs ----
     summary = summarize_experiment(experiment)
 
@@ -119,6 +136,8 @@ def build_report_zip(
             "Mean": f"{s['mean']:.2f}" if np.isfinite(s["mean"]) else "",
             "Std": f"{s['std']:.2f}" if np.isfinite(s["std"]) else "",
             "Best": f"{s['best']:.2f}" if np.isfinite(s["best"]) else "",
+            "NFE_mean": (f"{s['nfe_mean']:.0f}"
+                         if np.isfinite(s["nfe_mean"]) else ""),
         })
 
     runs_rows = []
@@ -127,6 +146,9 @@ def build_report_zip(
             runs_rows.append({
                 "Algorithm": algo, "Run": r.run_index, "Seed": r.seed,
                 "Status": r.status,
+                "NFE": getattr(r, "nfe", 0),
+                "Hydraulic_simulations": getattr(r, "n_sim", 0),
+                "NFE_to_best": getattr(r, "nfe_to_best", 0),
                 "Restarts": len(getattr(r, "restart_gens", [])),
                 "Restart_at_gen": " ".join(
                     str(g) for g in getattr(r, "restart_gens", [])
@@ -177,7 +199,7 @@ def build_report_zip(
         node_pressures=node_pressures, pipe_velocities=pipe_velocities,
         hydraulics_converged=hydraulics_converged,
         problem_snapshot=problem_snapshot, config=config,
-        pipe_names=pipe_names,
+        pipe_names=pipe_names, analysis=analysis,
     )
     readme = _build_readme(experiment, best_algo, best_run_index)
 
@@ -202,6 +224,12 @@ def build_report_zip(
                     _to_csv(summary_rows).encode("utf-8-sig"))
         zf.writestr("data/runs.csv",
                     _to_csv(runs_rows).encode("utf-8-sig"))
+        if stats_desc_csv:
+            zf.writestr("data/statistics_descriptive.csv",
+                        stats_desc_csv.encode("utf-8-sig"))
+        if stats_tests_csv:
+            zf.writestr("data/statistics_tests.csv",
+                        stats_tests_csv.encode("utf-8-sig"))
         zf.writestr("data/pipes.csv",
                     _to_csv(pipes_rows).encode("utf-8-sig"))
         zf.writestr("data/nodes.csv",
@@ -227,6 +255,57 @@ def _to_csv(rows) -> str:
     return buf.getvalue()
 
 
+def _md_table(df) -> list:
+    """DataFrame -> GitHub markdown table lines."""
+    cols = [str(c) for c in df.columns]
+    out = ["| " + " | ".join(cols) + " |",
+           "|" + "|".join("---" for _ in cols) + "|"]
+    for _, row in df.iterrows():
+        out.append("| " + " | ".join(str(v) for v in row.tolist()) + " |")
+    return out
+
+
+def _stats_markdown(analysis) -> list:
+    L = ["## Statistical analysis\n"]
+    for n in analysis["notes"]:
+        L.append(f"> **Note:** {n}\n")
+
+    L.append("### Descriptive statistics\n")
+    d = st_.descriptive_dataframe(analysis).set_index("Algorithm").T
+    d.insert(0, "Metric", d.index)
+    L.extend(_md_table(d))
+    L.append("")
+    if analysis.get("reference_cost"):
+        L.append(f"Reference (best-known) cost: "
+                 f"{analysis['reference_cost']:,.2f}; success = finished, "
+                 f"feasible and within {analysis['tol_pct']:g}% of it.\n")
+
+    if analysis["pairwise"]:
+        L.append("### Comparison between algorithms\n")
+        t = st_.tests_dataframe(analysis["pairwise"]).set_index(
+            "Comparison").T
+        t.insert(0, "Metric", t.index)
+        L.extend(_md_table(t))
+        L.append("")
+        for r in analysis["pairwise"]:
+            L.append(f"- {r['verdict']}")
+        L.append("")
+        for f in analysis["feasibility"]:
+            L.append(
+                f"- Feasibility rate {f['x']}: {f['rate_x']:.0f}%, "
+                f"{f['y']}: {f['rate_y']:.0f}% "
+                f"(Fisher exact p = {st_.fmt_p(f['p'])}).")
+        L.append("")
+
+    L.append("### Statistical methods\n")
+    L.append(st_.methods_text(analysis["alpha"]) + "\n")
+    L.append("References:\n")
+    for ref in st_.REFERENCES:
+        L.append(f"- {ref}")
+    L.append("")
+    return L
+
+
 def _restart_text(experiment) -> str:
     rs = getattr(experiment, "restart", None) or {}
     if not rs.get("enabled"):
@@ -247,7 +326,7 @@ def _restart_text(experiment) -> str:
 def _build_markdown(*, experiment, summary, best_algo, best_run_index,
                     best_position_m, node_pressures, pipe_velocities,
                     hydraulics_converged, problem_snapshot, config,
-                    pipe_names) -> str:
+                    pipe_names, analysis=None) -> str:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     best_run = experiment.runs[best_algo][best_run_index - 1]
     pmin = problem_snapshot["Pmin"]
@@ -293,13 +372,18 @@ def _build_markdown(*, experiment, summary, best_algo, best_run_index,
 
     L.append("## Experiment summary\n")
     L.append("| Algorithm | Runs | Success | Feasible | Mean cost | "
-             "Std | Best |")
-    L.append("|---|---|---|---|---|---|---|")
+             "Std | Best | NFE per run |")
+    L.append("|---|---|---|---|---|---|---|---|")
     for algo, s in summary.items():
+        nfe = f"{s['nfe_mean']:,.0f}" if np.isfinite(s["nfe_mean"]) else "—"
         L.append(f"| {algo} | {len(experiment.runs[algo])} | "
                  f"{s['n_success']} | {s['n_feasible']} | "
-                 f"{s['mean']:.0f} | {s['std']:.0f} | {s['best']:.0f} |")
+                 f"{s['mean']:.0f} | {s['std']:.0f} | {s['best']:.0f} | "
+                 f"{nfe} |")
     L.append("")
+
+    if analysis is not None:
+        L.extend(_stats_markdown(analysis))
 
     L.append("## Best design\n")
     L.append(f"- **Algorithm:** {best_algo}")
@@ -309,6 +393,10 @@ def _build_markdown(*, experiment, summary, best_algo, best_run_index,
     L.append(f"- **Cost:** {best_run.score:.2f}")
     L.append(f"- **Feasible:** {'Yes' if best_run.feasible else 'No'}")
     L.append(f"- **Execution time:** {best_run.execution_time:.2f} s")
+    if getattr(best_run, "nfe", 0) > 0:
+        L.append(f"- **NFE:** {best_run.nfe:,} "
+                 f"(hydraulic simulations: {best_run.n_sim:,}; "
+                 f"best found at NFE {best_run.nfe_to_best:,})")
     L.append(f"- **Hydraulics converged:** "
              f"{'Yes' if hydraulics_converged else 'No'}\n")
 
@@ -377,6 +465,8 @@ Contents
   data/               Result tables (CSV, UTF-8-BOM → Excel-friendly):
                         summary.csv    Per-algorithm statistics
                         runs.csv       All individual runs
+                        statistics_descriptive.csv   Per-algorithm statistics
+                        statistics_tests.csv         Mann-Whitney / A12 tests
                         pipes.csv      Best-design pipe results
                         nodes.csv      Best-design node results
   figures/            Static PNG figures (150 dpi).

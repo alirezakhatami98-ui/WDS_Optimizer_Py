@@ -26,6 +26,9 @@ class RunRecord:
     error_message: str = ""
     restart_gens: list = field(default_factory=list)   # 1-based generations
     epoch_bests: list = field(default_factory=list)    # best cost per epoch
+    nfe: int = 0            # candidate evaluations requested (pop x gens ...)
+    n_sim: int = 0          # hydraulic simulations actually run (cache misses)
+    nfe_to_best: int = 0    # NFE when the final best was first found
 
 
 @dataclass
@@ -163,6 +166,9 @@ def run_experiment(
                     execution_time=dt, convergence=conv, status="Success",
                     restart_gens=list(meta.get("restart_gens", [])),
                     epoch_bests=list(meta.get("epoch_bests", [])),
+                    nfe=int(meta.get("nfe", 0)),
+                    n_sim=int(meta.get("n_sim", 0)),
+                    nfe_to_best=int(meta.get("nfe_to_best", 0)),
                 ))
             except (GACancelled, PSOCancelled) as e:
                 # If the algorithm attached its best-so-far
@@ -180,6 +186,9 @@ def run_experiment(
                         error_message="Stopped by user; best-so-far kept.",
                         restart_gens=list(meta.get("restart_gens", [])),
                         epoch_bests=list(meta.get("epoch_bests", [])),
+                        nfe=int(meta.get("nfe", 0)),
+                        n_sim=int(meta.get("n_sim", 0)),
+                        nfe_to_best=int(meta.get("nfe_to_best", 0)),
                     ))
                 else:
                     runs.append(RunRecord(
@@ -242,5 +251,7 @@ def summarize_experiment(result: ExperimentResult) -> dict:
             "std":  float(costs.std(ddof=1)) if costs.size > 1 else 0.0,
             "best": float(costs.min()) if costs.size else float("nan"),
             "best_overall": float(costs_all.min()) if costs_all.size else float("nan"),
+            "nfe_mean": (float(np.mean([r.nfe for r in ok if r.nfe > 0]))
+                         if any(r.nfe > 0 for r in ok) else float("nan")),
         }
     return summary

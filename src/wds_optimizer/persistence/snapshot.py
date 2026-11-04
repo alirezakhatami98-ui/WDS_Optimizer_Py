@@ -32,6 +32,9 @@ def _run_to_dict(r: RunRecord) -> dict:
         "status": r.status,
         "error_message": r.error_message,
         "restart_gens": [int(g) for g in getattr(r, "restart_gens", [])],
+        "nfe": int(getattr(r, "nfe", 0)),
+        "n_sim": int(getattr(r, "n_sim", 0)),
+        "nfe_to_best": int(getattr(r, "nfe_to_best", 0)),
         # inf (no feasible design in that epoch) is stored as null
         "epoch_bests": [
             float(c) if np.isfinite(c) else None
@@ -58,6 +61,9 @@ def _dict_to_run(d: dict) -> RunRecord:
         status=d["status"],
         error_message=d["error_message"],
         restart_gens=list(d.get("restart_gens", [])),   # old files: []
+        nfe=int(d.get("nfe", 0)),                       # old files: 0
+        n_sim=int(d.get("n_sim", 0)),
+        nfe_to_best=int(d.get("nfe_to_best", 0)),
         epoch_bests=[
             float("inf") if c is None else float(c)
             for c in d.get("epoch_bests", [])

@@ -57,8 +57,20 @@ def run_ga(problem, config,
 
     cache = config.Cache if config.Cache is not None else {}
 
+    # ---- evaluation accounting (NFE) ----
+    cache0 = len(cache)       # unique simulations = cache growth in this run
+    n_evals = 0               # candidate evaluations requested
+    nfe_best = 0              # NFE at which the final best was first found
+
+    def _record_meta():
+        if meta is not None:
+            meta["nfe"] = n_evals
+            meta["n_sim"] = len(cache) - cache0
+            meta["nfe_to_best"] = nfe_best
+
     Pop = rng.integers(0, ND, size=(NVar, NS))
     cost, viol, feas = evaluate_population(Pop, problem, cache)
+    n_evals += NS
 
     Conv = np.zeros(MaxGen)
     BestSolEver, BestCostEver, BestViolEver = None, np.inf, np.inf
@@ -89,6 +101,7 @@ def run_ga(problem, config,
         if cancel_callback is not None and cancel_callback():
             partial = None
             epoch_bests.append(float(BestCostEver))
+            _record_meta()
             if GlobalSol is not None:        # at least one generation done
                 pos = problem["InitialD"].copy()
                 pos[problem["VariablePipes"]] = problem["D"][GlobalSol]
@@ -139,6 +152,7 @@ def run_ga(problem, config,
 
         Pop = NewPop
         cost, viol, feas = evaluate_population(Pop, problem, cache)
+        n_evals += NS
 
         # ---- update epoch bests ----
         epoch_improved = False
@@ -166,6 +180,7 @@ def run_ga(problem, config,
                 BestSolEver if BestSolEver is not None else BestUnfSol
             ).copy()
             GlobalCost, GlobalViol = eCost, eViol
+            nfe_best = n_evals
 
         Conv[G] = GlobalCost
 
@@ -196,6 +211,7 @@ def run_ga(problem, config,
                     BestUnfSol = GlobalSol.copy()
                     BestUnfCost, BestViolEver = GlobalCost, GlobalViol
             cost, viol, feas = evaluate_population(Pop, problem, cache)
+            n_evals += NS
             stall = 0
 
         if progress_callback is not None and not ProgressFailed:
@@ -208,6 +224,7 @@ def run_ga(problem, config,
                         "BestCost": float(Conv[G]),
                         "Feasible": bool(GlobalViol == 0.0),
                         "Convergence": Conv[: G + 1].copy(),
+                        "NFE": n_evals,
                         "Restarts": len(restart_gens),
                         "RestartGens": list(restart_gens),
                     })
@@ -216,6 +233,7 @@ def run_ga(problem, config,
                     ProgressFailed = True
 
     epoch_bests.append(float(BestCostEver))
+    _record_meta()
 
     full_position = problem["InitialD"].copy()
     full_position[problem["VariablePipes"]] = problem["D"][GlobalSol]

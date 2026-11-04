@@ -43,6 +43,17 @@ def run_pso(problem, config,
 
     cache = config.Cache if config.Cache is not None else {}
 
+    # ---- evaluation accounting (NFE) ----
+    cache0 = len(cache)       # unique simulations = cache growth in this run
+    n_evals = 0               # candidate evaluations requested
+    nfe_best = 0              # NFE at which the final best was first found
+
+    def _record_meta():
+        if meta is not None:
+            meta["nfe"] = n_evals
+            meta["n_sim"] = len(cache) - cache0
+            meta["nfe_to_best"] = nfe_best
+
     # Continuous positions rounded on use
     X = rng.integers(0, ND, size=(NVar, N)).astype(float)
     V = np.zeros((NVar, N))
@@ -82,6 +93,7 @@ def run_pso(problem, config,
     for G in range(MaxGen):
         if cancel_callback is not None and cancel_callback():
             partial = None
+            _record_meta()
             epoch_bests.append(
                 float(GBestCost) if GBestViol == 0.0 else float("inf"))
             if BestX is not None:            # at least one iteration done
@@ -101,6 +113,7 @@ def run_pso(problem, config,
         )
 
         cost, viol, feas = evaluate_population(X_discrete, problem, cache)
+        n_evals += N
         prev_gbest = (GBestCost, GBestViol)      # swarm best of this epoch
 
         for i in range(N):
@@ -147,6 +160,7 @@ def run_pso(problem, config,
         if is_better_solution(GBestCost, GBestViol, BestCost, BestViol):
             BestX = GBestX.copy() if GBestX is not None else None
             BestCost, BestViol = GBestCost, GBestViol
+            nfe_best = n_evals
 
         Conv[G] = BestCost
 
@@ -187,6 +201,7 @@ def run_pso(problem, config,
                         "BestCost": float(Conv[G]),
                         "Feasible": bool(BestViol == 0.0),
                         "Convergence": Conv[: G + 1].copy(),
+                        "NFE": n_evals,
                         "Restarts": len(restart_gens),
                         "RestartGens": list(restart_gens),
                     })
@@ -196,6 +211,7 @@ def run_pso(problem, config,
 
     epoch_bests.append(
         float(GBestCost) if GBestViol == 0.0 else float("inf"))
+    _record_meta()
 
     full_position = problem["InitialD"].copy()
     full_position[problem["VariablePipes"]] = problem["D"][BestX]
