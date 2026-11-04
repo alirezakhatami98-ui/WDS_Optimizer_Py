@@ -2,6 +2,7 @@
 
 import numpy as np
 
+from ..hydraulics.fast_solver import get_solver
 from ..hydraulics.simulation import run_hydraulic_simulation
 from .cost import calculate_cost_from_indices
 from .constraints import check_constraints
@@ -27,6 +28,7 @@ def evaluate_population(Pop, problem, cache):
     junction_names = problem["junction_names"]
     wn = problem["wn"]
     initial_D = problem["InitialD"]
+    solver = get_solver(problem)          # None -> slow reference path
 
     for i in range(NS):
         key = tuple(int(x) for x in Pop[:, i])
@@ -37,9 +39,12 @@ def evaluate_population(Pop, problem, cache):
         full_D = initial_D.copy()
         full_D[var_pipes] = D_m[Pop[:, i]]
 
-        Pj, Vp, ok = run_hydraulic_simulation(
-            wn, full_D, pipe_names, junction_names
-        )
+        if solver is not None:
+            Pj, Vp, ok = solver.solve(full_D)
+        else:
+            Pj, Vp, ok = run_hydraulic_simulation(
+                wn, full_D, pipe_names, junction_names
+            )
         c = calculate_cost_from_indices(
             Pop[:, i], var_pipes, unit_costs, lengths
         )
