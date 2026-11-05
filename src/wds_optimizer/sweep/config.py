@@ -9,6 +9,8 @@ SWEEP_PARAMETERS = {
     "PSO_w":         "PSO inertia weight (w)",
     "PSO_c1":        "PSO cognitive coefficient (c1)",
     "PSO_c2":        "PSO social coefficient (c2)",
+    "DE_F":          "DE differential weight (F)",
+    "DE_CR":         "DE crossover rate (CR)",
     "NS":            "Population / swarm size",
     "MaxGen":        "Max generations / iterations",
     "NumberOfRuns":  "Runs per algorithm",
@@ -51,6 +53,10 @@ def apply_sweep_parameter(base_cfg, problem, param_name, value, n_runs):
         cfg.PSO.c1 = float(value)
     elif param_name == "PSO_c2":
         cfg.PSO.c2 = float(value)
+    elif param_name == "DE_F":
+        cfg.DE.F = float(value)
+    elif param_name == "DE_CR":
+        cfg.DE.CR = float(value)
     elif param_name == "NS":
         cfg.NS = int(value)
     elif param_name == "MaxGen":

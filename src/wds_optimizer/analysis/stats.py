@@ -335,6 +335,22 @@ def analyze_experiment(result, reference_cost=None, tol_pct=1.0,
         f["x"], f["y"] = a, b
         feas.append(f)
 
+    # With 3+ algorithms, report an omnibus Kruskal-Wallis test first.
+    omnibus = None
+    if len(algos) >= 3:
+        usable = [g for g in groups.values() if len(g) >= 1]
+        omnibus = {"H": float("nan"), "p": float("nan"), "note": ""}
+        if len(usable) < 2:
+            omnibus["note"] = "Need at least 2 algorithms with feasible runs."
+        elif np.ptp(np.concatenate(usable)) == 0:
+            omnibus["p"], omnibus["note"] = 1.0, "All values are identical."
+        else:
+            try:
+                h, p = sps.kruskal(*usable)
+                omnibus["H"], omnibus["p"] = float(h), float(p)
+            except ValueError as e:
+                omnibus["note"] = str(e)
+
     notes = []
     for a in algos:
         n = desc[a]["n_feasible"]
@@ -347,7 +363,7 @@ def analyze_experiment(result, reference_cost=None, tol_pct=1.0,
         notes.append("The experiment was cancelled; statistics use only "
                      "the runs that finished.")
     return {"descriptive": desc, "pairwise": pairs, "feasibility": feas,
-            "notes": notes, "alpha": alpha,
+            "omnibus": omnibus, "notes": notes, "alpha": alpha,
             "reference_cost": reference_cost, "tol_pct": tol_pct}
 
 
@@ -497,7 +513,8 @@ def methods_text(alpha=ALPHA) -> str:
         "Mann-Whitney U test (Wilcoxon rank-sum; exact p-values for small "
         "samples without ties, otherwise a normal approximation with tie "
         f"and continuity corrections) at alpha = {alpha}. With more than "
-        "two groups, p-values are Holm-adjusted. The effect size is the "
+        "two groups, a Kruskal-Wallis omnibus test is reported first and "
+        "the pairwise p-values are Holm-adjusted. The effect size is the "
         "Vargha-Delaney A12 (probability that a random run of the first "
         "algorithm has lower cost than one of the second, ties counted "
         "half; |A12-0.5| < 0.06 negligible, < 0.14 small, < 0.21 medium, "
@@ -510,7 +527,8 @@ def methods_text(alpha=ALPHA) -> str:
         "here are independent. The number of function evaluations (NFE) "
         "counts every candidate design the algorithm submitted for "
         "evaluation (population size x generations, plus the initial "
-        "population for GA and the re-evaluation after each restart); "
+        "population for GA and DE and the re-evaluation of the new "
+        "population after each GA/DE restart); "
         "'hydraulic simulations' counts the EPANET runs actually executed, "
         "because repeated designs are served from a cache. NFE to best is "
         "the NFE at which the final best design was first found."

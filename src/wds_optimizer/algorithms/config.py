@@ -20,6 +20,18 @@ class PSOConfig:
 
 
 @dataclass
+class DEConfig:
+    # Note on CR: pipe-sizing cost is separable (a sum over pipes) while the
+    # hydraulic constraints couple them.  Low CR (few genes changed per
+    # trial) suited this structure better than the textbook 0.9 in our
+    # tests on two synthetic networks - tune it with a DE_CR sweep.
+    F: float = 0.5                    # differential weight
+    CR: float = 0.3                   # binomial crossover rate (see note)
+    # "rand/1/bin" | "best/1/bin" | "current-to-best/1/bin"
+    Strategy: str = "rand/1/bin"
+
+
+@dataclass
 class RestartConfig:
     """Restart-on-stagnation (shared by GA and PSO).
 
@@ -55,6 +67,7 @@ class AlgorithmConfig:
     Cache: Optional[dict] = None
     GA: GAConfig = field(default_factory=GAConfig)
     PSO: PSOConfig = field(default_factory=PSOConfig)
+    DE: DEConfig = field(default_factory=DEConfig)
     Restart: RestartConfig = field(default_factory=RestartConfig)
     Parallel: ParallelConfig = field(default_factory=ParallelConfig)
 

@@ -106,6 +106,11 @@ def _get_network_units(inp_path: str):
 #  UI helpers
 # =====================================================================
 
+ALGORITHMS = ("GA", "PSO", "DE")
+ALGO_COLORS = {"GA": "#d9480f", "PSO": "#1971c2", "DE": "#7048e8"}
+ALGO_COLORS_A = {"GA": "#f59f00", "PSO": "#15aabf", "DE": "#b197fc"}
+DE_STRATEGIES = ("rand/1/bin", "best/1/bin", "current-to-best/1/bin")
+
 _BUTTON_CSS = """
 <style>
 /* Start buttons: green */
@@ -163,7 +168,7 @@ def _header():
     st.markdown(_BUTTON_CSS, unsafe_allow_html=True)
     st.title("💧 WDS Optimizer")
     st.caption(
-        "Water distribution network optimization using GA and PSO, "
+        "Water distribution network optimization using GA, PSO and DE, "
         "powered by WNTR/EPANET. Python port of the MATLAB toolkit."
     )
 
@@ -198,7 +203,10 @@ def _init_widget_state():
         "pso_c2_input":      float(st.session_state.get("pso_c2", 1.5)),
         "n_runs_input":      int(st.session_state.get("n_runs", 3)),
         "exp_seed_input":    int(st.session_state.get("exp_seed", 1)),
-        "algo_input":        "GA",
+        "algo_input":        ["GA"],
+        "de_f_input":        float(st.session_state.get("de_f", 0.5)),
+        "de_cr_input":       float(st.session_state.get("de_cr", 0.3)),
+        "de_strategy_input": st.session_state.get("de_strategy", "rand/1/bin"),
         "rs_enabled_input":  bool(st.session_state.get("rs_enabled", False)),
         "rs_patience_input": int(st.session_state.get("rs_patience", 30)),
         "rs_max_input":      int(st.session_state.get("rs_max", 3)),
@@ -316,12 +324,15 @@ def _render_sidebar():
         st.divider()
         st.header("3. Algorithm")
         # Algorithm
-        algo = st.radio(
-            "Algorithm", ["GA", "PSO", "Both"],
-            key="algo_input", horizontal=True,
+        algo = st.multiselect(
+            "Algorithms to run", list(ALGORITHMS), key="algo_input",
+            help="Every selected algorithm runs with the same number of "
+                 "runs, seeds and restart settings.",
         )
+        if not algo:
+            st.caption("Select at least one algorithm.")
 
-        if algo in ("GA", "Both"):
+        if "GA" in algo:
             with st.expander("GA parameters", expanded=True):
                 st.number_input("Pc (crossover)", 0.0, 1.0, step=0.05,
                                 key="ga_pc_input")
@@ -330,7 +341,7 @@ def _render_sidebar():
                 st.selectbox("Selection", ["tournament", "roulette"],
                              key="ga_sel_input")
 
-        if algo in ("PSO", "Both"):
+        if "PSO" in algo:
             with st.expander("PSO parameters", expanded=True):
                 st.number_input("w (inertia)", 0.0, 2.0, step=0.05,
                                 key="pso_w_input")
@@ -338,6 +349,18 @@ def _render_sidebar():
                                 key="pso_c1_input")
                 st.number_input("c2 (social)", 0.0, 3.0, step=0.1,
                                 key="pso_c2_input")
+
+        if "DE" in algo:
+            with st.expander("DE parameters", expanded=True):
+                st.number_input("F (differential weight)", 0.05, 2.0,
+                                step=0.05, key="de_f_input")
+                st.number_input("CR (crossover rate)", 0.0, 1.0, step=0.05,
+                                key="de_cr_input",
+                                help="Share of genes taken from the mutant. "
+                                     "Low values suit separable problems "
+                                     "such as pipe sizing; try a DE_CR sweep.")
+                st.selectbox("Strategy", list(DE_STRATEGIES),
+                             key="de_strategy_input")
 
         with st.expander("Restart on stagnation", expanded=False):
             rs_on = st.checkbox(
@@ -404,7 +427,7 @@ def _render_sidebar():
         busy = st.session_state.get("job") is not None
         run_clicked = _job_button(
             "run", "🚀 Run Experiment", "⏹ Cancel experiment",
-            enabled=can_run,
+            enabled=can_run and bool(st.session_state.get("algo_input")),
         )
         if not can_run:
             st.caption("Load all three input files to enable.")
@@ -440,6 +463,7 @@ def _render_sidebar():
                     config={k: st.session_state[k] for k in (
                         "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
                         "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
+                        "de_f", "de_cr", "de_strategy",
                         "rs_enabled", "rs_patience", "rs_max",
                         "rs_keep_best", "rs_mode", "rs_perturb",
                     )},
@@ -489,7 +513,7 @@ def _render_sidebar():
                 placeholder="e.g. 0.6, 0.7, 0.8, 0.9",
             )
             sweep_algo = st.multiselect(
-                "Algorithms", ["GA", "PSO"], default=["GA"],
+                "Algorithms", list(ALGORITHMS), default=["GA"],
                 key="sweep_algo_input",
             )
             sweep_runs = st.number_input(
@@ -539,6 +563,7 @@ def _render_sidebar():
                             config={k: st.session_state[k] for k in (
                                 "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
                                 "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
+                        "de_f", "de_cr", "de_strategy",
                         "rs_enabled", "rs_patience", "rs_max",
                         "rs_keep_best", "rs_mode", "rs_perturb",
                             )},
@@ -665,6 +690,8 @@ def _sync_sidebar_state(with_n_runs: bool = True):
         ("ga_sel", "ga_sel_input"),
         ("pso_w", "pso_w_input"), ("pso_c1", "pso_c1_input"),
         ("pso_c2", "pso_c2_input"),
+        ("de_f", "de_f_input"), ("de_cr", "de_cr_input"),
+        ("de_strategy", "de_strategy_input"),
         ("rs_enabled", "rs_enabled_input"),
         ("rs_patience", "rs_patience_input"),
         ("rs_max", "rs_max_input"),
@@ -689,6 +716,9 @@ def _build_base_cfg():
     cfg.PSO.w = st.session_state.pso_w
     cfg.PSO.c1 = st.session_state.pso_c1
     cfg.PSO.c2 = st.session_state.pso_c2
+    cfg.DE.F = float(st.session_state.de_f)
+    cfg.DE.CR = float(st.session_state.de_cr)
+    cfg.DE.Strategy = str(st.session_state.de_strategy)
     cfg.Restart.Enabled = bool(st.session_state.rs_enabled)
     cfg.Restart.Patience = int(st.session_state.rs_patience)
     cfg.Restart.MaxRestarts = int(st.session_state.rs_max)
@@ -720,7 +750,11 @@ def _start_run(algo_label: str):
 
     problem, units, wn = _prepare_problem()
     base_cfg = _build_base_cfg()
-    algos = {"GA": ["GA"], "PSO": ["PSO"]}.get(algo_label, ["GA", "PSO"])
+    algos = [a for a in ALGORITHMS if a in (algo_label or [])]
+    if not algos:
+        raise ValueError("Select at least one algorithm.")
+    if "DE" in algos and int(st.session_state.ns) < 4:
+        raise ValueError("DE needs a population (NS) of at least 4.")
     n_runs = int(st.session_state.n_runs)
     seed = int(st.session_state.exp_seed)
 
@@ -761,6 +795,16 @@ def _start_run(algo_label: str):
 
 def _start_sweep(param_name, values, algorithms, n_runs):
     _sync_sidebar_state(with_n_runs=False)
+
+    # A GA_/PSO_/DE_ parameter only matters if that algorithm is selected.
+    for prefix, algo in (("GA_", "GA"), ("PSO_", "PSO"), ("DE_", "DE")):
+        if param_name.startswith(prefix) and algo not in algorithms:
+            raise ValueError(
+                f"{param_name} only affects {algo}; add {algo} to the "
+                f"sweep's Algorithms or choose another parameter."
+            )
+    if not algorithms:
+        raise ValueError("Select at least one algorithm for the sweep.")
 
     problem, units, wn = _prepare_problem()
     base_cfg = _build_base_cfg()
@@ -843,7 +887,7 @@ def _job_panel():
             + f"elapsed {job.elapsed:.0f} s"
         )
         conv = prog["Convergence"]
-        color = "#d9480f" if prog["Algorithm"] == "GA" else "#1971c2"
+        color = ALGO_COLORS.get(prog["Algorithm"], "gray")
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=np.arange(1, len(conv) + 1), y=conv, mode="lines",
@@ -1047,6 +1091,7 @@ def _restore_from_snapshot(data: dict):
     # ---- Canonical config keys (safe to set anytime) ----
     for key in ("ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
                 "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
+                "de_f", "de_cr", "de_strategy",
                 "rs_enabled", "rs_patience", "rs_max", "rs_keep_best",
                 "rs_mode", "rs_perturb"):
         if key in cfg and cfg[key] is not None:
@@ -1090,13 +1135,17 @@ def _restore_from_snapshot(data: dict):
     }
 
     # Derive algo_input from the loaded experiment's algorithms.
-    algos = set(data.get("experiment", {}).get("algorithms", []))
-    if algos == {"GA", "PSO"}:
-        widget_updates["algo_input"] = "Both"
-    elif algos == {"PSO"}:
-        widget_updates["algo_input"] = "PSO"
-    else:
-        widget_updates["algo_input"] = "GA"
+    saved = set(data.get("experiment", {}).get("algorithms", []))
+    widget_updates["algo_input"] = (
+        [a for a in ALGORITHMS if a in saved] or ["GA"]
+    )
+    # DE settings (files saved before DE existed keep the current ones)
+    widget_updates["de_f_input"] = float(
+        cfg.get("de_f") or st.session_state.get("de_f", 0.5))
+    widget_updates["de_cr_input"] = float(
+        cfg.get("de_cr") or st.session_state.get("de_cr", 0.3))
+    widget_updates["de_strategy_input"] = (
+        cfg.get("de_strategy") or "rand/1/bin")
 
     st.session_state._pending_restore = widget_updates
 
@@ -1322,8 +1371,8 @@ def _render_compare_tab():
     # ---- Convergence overlay ----
     st.markdown("### Convergence")
     fig = go.Figure()
-    ca = {"GA": "#f59f00", "PSO": "#15aabf"}
-    cb = {"GA": "#d9480f", "PSO": "#1971c2"}
+    ca = ALGO_COLORS_A
+    cb = ALGO_COLORS
     for label, exp, colors, dash in [
         ("A", exp_a, ca, "solid"),
         ("B", exp_b, cb, "dash"),
@@ -1444,7 +1493,7 @@ def _render_summary_tab():
     # ---- Convergence curves ----
     st.subheader("Convergence")
     fig = go.Figure()
-    colors = {"GA": "#d9480f", "PSO": "#1971c2"}
+    colors = ALGO_COLORS
     for algo, runs in result.runs.items():
         conv_list = [
             r.convergence for r in runs
@@ -1546,6 +1595,19 @@ def _render_statistics_tab():
 
     if analysis["pairwise"]:
         st.markdown("### Comparison between algorithms")
+        om = analysis.get("omnibus")
+        if om is not None:
+            if np.isfinite(om["p"]):
+                st.markdown(
+                    f"Kruskal-Wallis across all algorithms: "
+                    f"**p = {st_.fmt_p(om['p'])}**"
+                    + (f" (H = {om['H']:.2f})" if np.isfinite(om["H"]) else "")
+                    + (" → at least one algorithm differs."
+                       if om["p"] < analysis["alpha"]
+                       else " → no significant difference overall.")
+                )
+            else:
+                st.caption(f"Kruskal-Wallis: {om['note']}")
         _stats_table(st_.tests_dataframe(analysis["pairwise"]), "Comparison")
         for r in analysis["pairwise"]:
             st.markdown(f"**{r['verdict']}**")
@@ -1558,7 +1620,7 @@ def _render_statistics_tab():
 
     # ---- ECDF of final costs ----
     st.markdown("### Empirical distribution of final costs")
-    colors = {"GA": "#d9480f", "PSO": "#1971c2"}
+    colors = ALGO_COLORS
     fig = go.Figure()
     for algo, runs in result.runs.items():
         c = np.sort(st_.feasible_costs(runs))

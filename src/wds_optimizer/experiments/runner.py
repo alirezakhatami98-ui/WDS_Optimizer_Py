@@ -9,6 +9,7 @@ import numpy as np
 from ..algorithms.config import AlgorithmConfig, build_algorithm_config
 from ..algorithms.ga import GACancelled, run_ga
 from ..algorithms.pso import PSOCancelled, run_pso
+from ..algorithms.de import DECancelled, run_de
 
 
 @dataclass
@@ -69,17 +70,17 @@ def run_experiment(
         NS, MaxGen, GA/PSO parameters.
     number_of_runs : int
     algorithms : list[str]
-        Subset of ``["GA", "PSO"]``.
+        Subset of ``["GA", "PSO", "DE"]``.
     experiment_seed : int
     progress_callback : callable(info), optional
         Forwarded to each algorithm. ``info`` gains ``RunIndex``,
         ``NumberOfRuns``, ``RunLabel``, ``Algorithm``.
     cancel_callback : callable() -> bool, optional
     """
-    # Normalize and order: GA first, then PSO
-    selected = [a for a in ("GA", "PSO") if a in algorithms]
+    # Normalize and order: GA, PSO, DE
+    selected = [a for a in ("GA", "PSO", "DE") if a in algorithms]
     if not selected:
-        raise ValueError("At least one of GA/PSO must be selected.")
+        raise ValueError("At least one of GA/PSO/DE must be selected.")
 
     # Generate per-run seeds (unique)
     rng = np.random.default_rng(experiment_seed)
@@ -127,6 +128,8 @@ def run_experiment(
             cfg.PSO.w = base_config.PSO.w
             cfg.PSO.c1 = base_config.PSO.c1
             cfg.PSO.c2 = base_config.PSO.c2
+            if getattr(base_config, "DE", None) is not None:
+                cfg.DE = replace(base_config.DE)
             if getattr(base_config, "Restart", None) is not None:
                 cfg.Restart = replace(base_config.Restart)
             cfg.Seed = int(run_seeds[r])
@@ -145,20 +148,13 @@ def run_experiment(
             meta = {}                      # filled by the algorithm
             t0 = time.perf_counter()
             try:
-                if algo == "GA":
-                    score, pos, conv, feas = run_ga(
-                        problem, cfg,
-                        progress_callback=per_run_cb,
-                        cancel_callback=cancel_callback,
-                        meta=meta,
-                    )
-                else:
-                    score, pos, conv, feas = run_pso(
-                        problem, cfg,
-                        progress_callback=per_run_cb,
-                        cancel_callback=cancel_callback,
-                        meta=meta,
-                    )
+                algo_fn = {"GA": run_ga, "PSO": run_pso, "DE": run_de}[algo]
+                score, pos, conv, feas = algo_fn(
+                    problem, cfg,
+                    progress_callback=per_run_cb,
+                    cancel_callback=cancel_callback,
+                    meta=meta,
+                )
                 dt = time.perf_counter() - t0
                 runs.append(RunRecord(
                     algorithm=algo, run_index=r + 1, seed=int(run_seeds[r]),
@@ -170,7 +166,7 @@ def run_experiment(
                     n_sim=int(meta.get("n_sim", 0)),
                     nfe_to_best=int(meta.get("nfe_to_best", 0)),
                 ))
-            except (GACancelled, PSOCancelled) as e:
+            except (GACancelled, PSOCancelled, DECancelled) as e:
                 # If the algorithm attached its best-so-far
                 # (score, position, convergence, feasible) keep it.
                 partial = getattr(e, "partial", None)

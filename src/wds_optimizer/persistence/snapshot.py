@@ -101,6 +101,7 @@ def build_snapshot(
         "config": {k: config.get(k) for k in (
             "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
             "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
+            "de_f", "de_cr", "de_strategy",
             "rs_enabled", "rs_patience", "rs_max", "rs_keep_best",
             "rs_mode", "rs_perturb",
         )},

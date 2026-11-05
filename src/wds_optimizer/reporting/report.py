@@ -282,6 +282,16 @@ def _stats_markdown(analysis) -> list:
 
     if analysis["pairwise"]:
         L.append("### Comparison between algorithms\n")
+        om = analysis.get("omnibus")
+        if om is not None:
+            if np.isfinite(om["p"]):
+                L.append(f"Kruskal-Wallis across all algorithms: "
+                         f"p = {st_.fmt_p(om['p'])}"
+                         + (f" (H = {om['H']:.2f})"
+                            if np.isfinite(om["H"]) else "") + ".\n")
+            else:
+                L.append(f"Kruskal-Wallis across all algorithms: "
+                         f"{om['note']}\n")
         t = st_.tests_dataframe(analysis["pairwise"]).set_index(
             "Comparison").T
         t.insert(0, "Metric", t.index)
@@ -304,6 +314,27 @@ def _stats_markdown(analysis) -> list:
         L.append(f"- {ref}")
     L.append("")
     return L
+
+
+def _algorithm_param_lines(experiment, config) -> list:
+    """One bullet per algorithm that was run, with its parameters."""
+    def g(key, default="?"):
+        v = config.get(key)
+        return default if v is None else v
+
+    out = []
+    for algo in experiment.algorithms:
+        if algo == "GA":
+            out.append(f"- **GA parameters:** crossover Pc = {g('ga_pc')}, "
+                       f"mutation Pm = {g('ga_pm')}, "
+                       f"selection = {g('ga_sel')}")
+        elif algo == "PSO":
+            out.append(f"- **PSO parameters:** inertia w = {g('pso_w')}, "
+                       f"c1 = {g('pso_c1')}, c2 = {g('pso_c2')}")
+        elif algo == "DE":
+            out.append(f"- **DE parameters:** F = {g('de_f')}, "
+                       f"CR = {g('de_cr')}, strategy = {g('de_strategy')}")
+    return out
 
 
 def _restart_text(experiment) -> str:
@@ -363,6 +394,8 @@ def _build_markdown(*, experiment, summary, best_algo, best_run_index,
     L.append(f"- **Experiment seed:** {experiment.experiment_seed}")
     L.append(f"- **Algorithms:** {', '.join(experiment.algorithms)}")
     L.append(f"- **Restart on stagnation:** {_restart_text(experiment)}")
+    for line in _algorithm_param_lines(experiment, config):
+        L.append(line)
     L.append(f"- **Pmin:** {pmin_disp:.2f} {p_unit} "
              f"({pmin:.3f} m)")
     L.append(f"- **Vmax:** {vmax_disp:.2f} {v_unit} "
