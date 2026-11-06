@@ -30,6 +30,18 @@ class DEConfig:
     # "rand/1/bin" | "best/1/bin" | "current-to-best/1/bin"
     Strategy: str = "rand/1/bin"
 
+@dataclass
+class SADEConfig:
+    Fmin: float = 0.1
+    Fmax: float = 0.9
+    CRmin: float = 0.1
+    CRmax: float = 0.9
+    UseConvergence: bool = True
+    Tol: float = 1e-6
+    # MATLAB safeguard: stop after this many generations without any
+    # improvement in the current epoch. 0 disables it. The paper relies
+    # purely on Cv < Tol; 300 matches the reference MATLAB implementation.
+    StagnationMax: int = 300
 
 @dataclass
 class RestartConfig:
@@ -68,6 +80,7 @@ class AlgorithmConfig:
     GA: GAConfig = field(default_factory=GAConfig)
     PSO: PSOConfig = field(default_factory=PSOConfig)
     DE: DEConfig = field(default_factory=DEConfig)
+    SADE: SADEConfig = field(default_factory=SADEConfig)
     Restart: RestartConfig = field(default_factory=RestartConfig)
     Parallel: ParallelConfig = field(default_factory=ParallelConfig)
 

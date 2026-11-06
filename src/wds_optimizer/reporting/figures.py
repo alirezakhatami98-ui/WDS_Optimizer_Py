@@ -37,7 +37,7 @@ def make_convergence_png(result, colors=None) -> bytes:
     """Mean convergence + min-max band per algorithm."""
     fig = Figure(figsize=(9, 5))
     ax = fig.add_subplot(111)
-    colors = colors or {"GA": "#d9480f", "PSO": "#1971c2", "DE": "#7048e8"}
+    colors = colors or {"GA": "#d9480f", "PSO": "#1971c2", "DE": "#7048e8", "SADE": "#0b7285"}
 
     for algo, runs in result.runs.items():
         convs = [
@@ -75,7 +75,7 @@ def make_convergence_png(result, colors=None) -> bytes:
 def make_cost_distribution_png(result, colors=None) -> bytes:
     fig = Figure(figsize=(7, 5))
     ax = fig.add_subplot(111)
-    colors = colors or {"GA": "#d9480f", "PSO": "#1971c2", "DE": "#7048e8"}
+    colors = colors or {"GA": "#d9480f", "PSO": "#1971c2", "DE": "#7048e8", "SADE": "#0b7285"}
 
     data, labels = [], []
     for algo, runs in result.runs.items():

@@ -174,6 +174,15 @@ def describe_runs(runs, reference_cost=None, tol_pct=1.0) -> dict:
     d["cache_hit_pct"] = (100.0 * (1 - np.sum(sims) / np.sum(nfes))
                           if nfes else nan)
     d["nfe_to_best_median"] = float(np.median(tobest)) if tobest else nan
+    d["nfe_to_best_mean"] = float(np.mean(tobest)) if tobest else nan
+    # AE1/AE2 of Zheng et al. (2013): evaluations to the best / in total
+    d["ae_ratio_pct"] = (100.0 * d["nfe_to_best_mean"] / d["nfe_mean"]
+                         if tobest and nfes else nan)
+    conv_flags = [r.extra["converged"] for r in succ
+                  if isinstance(getattr(r, "extra", None), dict)
+                  and "converged" in r.extra]
+    d["converged_pct"] = (100.0 * float(np.mean(conv_flags))
+                          if conv_flags else nan)
 
     gens = []
     for r in succ:
@@ -441,6 +450,9 @@ def descriptive_dataframe(analysis: dict, formatted=True) -> pd.DataFrame:
                 "Gen. to best (median)": _fmt(d["gen_to_best_median"], ".0f"),
                 "NFE per run": _fmt(d["nfe_mean"], ",.0f"),
                 "NFE to best (median)": _fmt(d["nfe_to_best_median"], ",.0f"),
+                "NFE to best (mean)": _fmt(d["nfe_to_best_mean"], ",.0f"),
+                "NFE to best / NFE %": _fmt(d["ae_ratio_pct"], ".1f"),
+                "Stopped by Cv criterion %": _fmt(d["converged_pct"], ".0f"),
                 "Hydraulic simulations (mean ± std)": (
                     f"{_fmt(d['sim_mean'], ',.0f')} ± "
                     f"{_fmt(d['sim_std'], ',.0f')}"),

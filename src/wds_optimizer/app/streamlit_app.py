@@ -45,7 +45,6 @@ from wds_optimizer.experiments.runner import (
     summarize_experiment,
 )
 from wds_optimizer.hydraulics.simulation import run_hydraulic_simulation
-from wds_optimizer.hydraulics.units import detect_network_units
 from wds_optimizer.hydraulics.units import (
     detect_network_units,
     pressure_from_si, pressure_to_si,
@@ -106,9 +105,17 @@ def _get_network_units(inp_path: str):
 #  UI helpers
 # =====================================================================
 
-ALGORITHMS = ("GA", "PSO", "DE")
-ALGO_COLORS = {"GA": "#d9480f", "PSO": "#1971c2", "DE": "#7048e8"}
-ALGO_COLORS_A = {"GA": "#f59f00", "PSO": "#15aabf", "DE": "#b197fc"}
+ALGORITHMS = ("GA", "PSO", "DE", "SADE")
+ALGO_COLORS = {"GA": "#d9480f", "PSO": "#1971c2", "DE": "#7048e8",
+               "SADE": "#0b7285"}
+ALGO_COLORS_A = {"GA": "#f59f00", "PSO": "#15aabf", "DE": "#b197fc",
+                 "SADE": "#66d9e8"}
+SADE_TOLS = (1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3)
+
+
+def _nearest_tol(v):
+    """Snap a stored tolerance to the nearest selectable option."""
+    return min(SADE_TOLS, key=lambda t: abs(np.log10(t) - np.log10(max(v, 1e-12))))
 DE_STRATEGIES = ("rand/1/bin", "best/1/bin", "current-to-best/1/bin")
 
 _BUTTON_CSS = """
@@ -168,7 +175,7 @@ def _header():
     st.markdown(_BUTTON_CSS, unsafe_allow_html=True)
     st.title("💧 WDS Optimizer")
     st.caption(
-        "Water distribution network optimization using GA, PSO and DE, "
+        "Water distribution network optimization using GA, PSO, DE and SADE, "
         "powered by WNTR/EPANET. Python port of the MATLAB toolkit."
     )
 
@@ -191,7 +198,7 @@ def _init_widget_state():
     # Seed defaults for keys that still don't exist.
     defaults = {
         "ns_input":          int(st.session_state.get("ns", 50)),
-        "max_gen_input":     int(st.session_state.get("max_gen", 100)),
+        "max_gen_input":     int(st.session_state.get("max_gen", 500)),
         "pmin_input":        float(st.session_state.get("pmin", 30.0)),
         "vmax_input":        float(st.session_state.get("vmax", 2.5)),
         "fixed_pipes_input": st.session_state.get("fixed_pipes", ""),
@@ -207,6 +214,14 @@ def _init_widget_state():
         "de_f_input":        float(st.session_state.get("de_f", 0.5)),
         "de_cr_input":       float(st.session_state.get("de_cr", 0.3)),
         "de_strategy_input": st.session_state.get("de_strategy", "rand/1/bin"),
+        "sade_fmin_input":   float(st.session_state.get("sade_fmin", 0.1)),
+        "sade_fmax_input":   float(st.session_state.get("sade_fmax", 0.9)),
+        "sade_crmin_input":  float(st.session_state.get("sade_crmin", 0.1)),
+        "sade_crmax_input":  float(st.session_state.get("sade_crmax", 0.9)),
+        "sade_conv_input":   bool(st.session_state.get("sade_conv", True)),
+        "sade_tol_input":    _nearest_tol(
+            float(st.session_state.get("sade_tol", 1e-6))),
+        "sade_stag_input":   int(st.session_state.get("sade_stag", 300)),
         "rs_enabled_input":  bool(st.session_state.get("rs_enabled", False)),
         "rs_patience_input": int(st.session_state.get("rs_patience", 30)),
         "rs_max_input":      int(st.session_state.get("rs_max", 3)),
@@ -362,6 +377,58 @@ def _render_sidebar():
                 st.selectbox("Strategy", list(DE_STRATEGIES),
                              key="de_strategy_input")
 
+        if "SADE" in algo:
+            with st.expander("SADE parameters", expanded=True):
+                st.caption(
+                    "Self-adaptive DE (Zheng, Zecchin & Simpson 2013): F "
+                    "and CR evolve per individual inside these ranges "
+                    "(paper: 0.1–0.9 for both)."
+                )
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.number_input("F min", 0.0, 2.0, step=0.05,
+                                    key="sade_fmin_input")
+                    st.number_input("CR min", 0.0, 1.0, step=0.05,
+                                    key="sade_crmin_input")
+                with c2:
+                    st.number_input("F max", 0.0, 2.0, step=0.05,
+                                    key="sade_fmax_input")
+                    st.number_input("CR max", 0.0, 1.0, step=0.05,
+                                    key="sade_crmax_input")
+                st.checkbox(
+                    "Stop when the population converges (Cv < tolerance)",
+                    key="sade_conv_input",
+                    help="The paper's termination rule: the run ends when "
+                         "all individuals reach (almost) the same cost. "
+                         "MaxGen is then only an upper cap. Untick to run "
+                         "the full MaxGen like the other algorithms. With "
+                         "restart enabled, convergence triggers a restart "
+                         "while restarts remain.",
+                )
+                st.select_slider(
+                    "Cv tolerance", options=list(SADE_TOLS),
+                    key="sade_tol_input",
+                    format_func=lambda v: f"{v:.0e}",
+                    disabled=not st.session_state.get(
+                        "sade_conv_input", True),
+                )
+                st.number_input(
+                    "Stagnation safeguard (generations without "
+                    "improvement; 0 = off)",
+                    min_value=0, max_value=10000, step=10,
+                    key="sade_stag_input",
+                    help="Matches the reference MATLAB implementation: "
+                         "the run stops if the current epoch's best "
+                         "cost has not improved for this many "
+                         "generations. The paper relies only on "
+                         "Cv < Tol; set 0 to follow the paper strictly.",
+                )
+                st.caption(
+                    "Paper's population heuristic: N between 1×D and 6×D "
+                    "(D = number of variable pipes), e.g. N = 200 for "
+                    "Hanoi (D = 34)."
+                )
+
         with st.expander("Restart on stagnation", expanded=False):
             rs_on = st.checkbox(
                 "Enable restart", key="rs_enabled_input",
@@ -464,6 +531,9 @@ def _render_sidebar():
                         "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
                         "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
                         "de_f", "de_cr", "de_strategy",
+                        "sade_fmin", "sade_fmax", "sade_crmin",
+                        "sade_crmax", "sade_conv", "sade_tol",
+                        "sade_stag",
                         "rs_enabled", "rs_patience", "rs_max",
                         "rs_keep_best", "rs_mode", "rs_perturb",
                     )},
@@ -564,6 +634,9 @@ def _render_sidebar():
                                 "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
                                 "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
                         "de_f", "de_cr", "de_strategy",
+                        "sade_fmin", "sade_fmax", "sade_crmin",
+                        "sade_crmax", "sade_conv", "sade_tol",
+                        "sade_stag",
                         "rs_enabled", "rs_patience", "rs_max",
                         "rs_keep_best", "rs_mode", "rs_perturb",
                             )},
@@ -692,6 +765,11 @@ def _sync_sidebar_state(with_n_runs: bool = True):
         ("pso_c2", "pso_c2_input"),
         ("de_f", "de_f_input"), ("de_cr", "de_cr_input"),
         ("de_strategy", "de_strategy_input"),
+        ("sade_fmin", "sade_fmin_input"), ("sade_fmax", "sade_fmax_input"),
+        ("sade_crmin", "sade_crmin_input"),
+        ("sade_crmax", "sade_crmax_input"),
+        ("sade_conv", "sade_conv_input"), ("sade_tol", "sade_tol_input"),
+        ("sade_stag", "sade_stag_input"),
         ("rs_enabled", "rs_enabled_input"),
         ("rs_patience", "rs_patience_input"),
         ("rs_max", "rs_max_input"),
@@ -719,6 +797,16 @@ def _build_base_cfg():
     cfg.DE.F = float(st.session_state.de_f)
     cfg.DE.CR = float(st.session_state.de_cr)
     cfg.DE.Strategy = str(st.session_state.de_strategy)
+    cfg.SADE.Fmin = float(st.session_state.sade_fmin)
+    cfg.SADE.Fmax = float(st.session_state.sade_fmax)
+    cfg.SADE.CRmin = float(st.session_state.sade_crmin)
+    cfg.SADE.CRmax = float(st.session_state.sade_crmax)
+    cfg.SADE.UseConvergence = bool(st.session_state.sade_conv)
+    cfg.SADE.Tol = float(st.session_state.sade_tol)
+    cfg.SADE.StagnationMax = int(st.session_state.sade_stag)
+    if cfg.SADE.Fmin > cfg.SADE.Fmax or cfg.SADE.CRmin > cfg.SADE.CRmax:
+        raise ValueError("SADE: each minimum must not exceed its maximum "
+                         "(F min ≤ F max, CR min ≤ CR max).")
     cfg.Restart.Enabled = bool(st.session_state.rs_enabled)
     cfg.Restart.Patience = int(st.session_state.rs_patience)
     cfg.Restart.MaxRestarts = int(st.session_state.rs_max)
@@ -753,8 +841,8 @@ def _start_run(algo_label: str):
     algos = [a for a in ALGORITHMS if a in (algo_label or [])]
     if not algos:
         raise ValueError("Select at least one algorithm.")
-    if "DE" in algos and int(st.session_state.ns) < 4:
-        raise ValueError("DE needs a population (NS) of at least 4.")
+    if ("DE" in algos or "SADE" in algos) and int(st.session_state.ns) < 4:
+        raise ValueError("DE and SADE need a population (NS) of at least 4.")
     n_runs = int(st.session_state.n_runs)
     seed = int(st.session_state.exp_seed)
 
@@ -797,7 +885,8 @@ def _start_sweep(param_name, values, algorithms, n_runs):
     _sync_sidebar_state(with_n_runs=False)
 
     # A GA_/PSO_/DE_ parameter only matters if that algorithm is selected.
-    for prefix, algo in (("GA_", "GA"), ("PSO_", "PSO"), ("DE_", "DE")):
+    for prefix, algo in (("GA_", "GA"), ("PSO_", "PSO"), ("DE_", "DE"),
+                         ("SADE_", "SADE")):
         if param_name.startswith(prefix) and algo not in algorithms:
             raise ValueError(
                 f"{param_name} only affects {algo}; add {algo} to the "
@@ -882,6 +971,8 @@ def _job_panel():
             f"{prog['MaxGenerations']}** | Best cost: "
             f"**{prog['BestCost']:,.0f}** | {feas} | "
             + f"NFE: **{prog.get('NFE', 0):,}** | "
+            + (f"Cv: **{prog['Cv']:.2e}** | "
+               if prog.get("Algorithm") == "SADE" and "Cv" in prog else "")
             + (f"Restarts: **{prog.get('Restarts', 0)}** | "
                if ctx.get("restart_on") else "")
             + f"elapsed {job.elapsed:.0f} s"
@@ -1092,6 +1183,8 @@ def _restore_from_snapshot(data: dict):
     for key in ("ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
                 "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
                 "de_f", "de_cr", "de_strategy",
+                "sade_fmin", "sade_fmax", "sade_crmin", "sade_crmax",
+                "sade_conv", "sade_tol", "sade_stag",
                 "rs_enabled", "rs_patience", "rs_max", "rs_keep_best",
                 "rs_mode", "rs_perturb"):
         if key in cfg and cfg[key] is not None:
@@ -1146,6 +1239,21 @@ def _restore_from_snapshot(data: dict):
         cfg.get("de_cr") or st.session_state.get("de_cr", 0.3))
     widget_updates["de_strategy_input"] = (
         cfg.get("de_strategy") or "rand/1/bin")
+    # SADE settings (files saved before SADE existed keep the defaults)
+    widget_updates["sade_fmin_input"] = float(
+        cfg.get("sade_fmin") if cfg.get("sade_fmin") is not None else 0.1)
+    widget_updates["sade_fmax_input"] = float(
+        cfg.get("sade_fmax") if cfg.get("sade_fmax") is not None else 0.9)
+    widget_updates["sade_crmin_input"] = float(
+        cfg.get("sade_crmin") if cfg.get("sade_crmin") is not None else 0.1)
+    widget_updates["sade_crmax_input"] = float(
+        cfg.get("sade_crmax") if cfg.get("sade_crmax") is not None else 0.9)
+    widget_updates["sade_conv_input"] = bool(
+        cfg.get("sade_conv") if cfg.get("sade_conv") is not None else True)
+    widget_updates["sade_tol_input"] = _nearest_tol(
+        float(cfg.get("sade_tol") or 1e-6))
+    widget_updates["sade_stag_input"] = int(
+        cfg.get("sade_stag") if cfg.get("sade_stag") is not None else 300)
 
     st.session_state._pending_restore = widget_updates
 
@@ -1642,6 +1750,43 @@ def _render_statistics_tab():
     st.plotly_chart(fig, width="stretch")
     st.caption("A curve further LEFT / above means cheaper results.")
 
+    sade_runs = [r for r in result.runs.get("SADE", [])
+                 if r.status in ("Success", "Partial")
+                 and (getattr(r, "extra", None) or {}).get("cv")]
+    if sade_runs:
+        with st.expander("SADE adaptation diagnostics"):
+            idx = st.selectbox(
+                "Run", range(len(sade_runs)),
+                format_func=lambda i: f"run {sade_runs[i].run_index} "
+                                      f"(cost {sade_runs[i].score:,.0f})",
+                key="sade_diag_run",
+            )
+            ex = sade_runs[idx].extra
+            gens = np.arange(1, len(ex["cv"]) + 1)
+            fig2 = go.Figure()
+            fig2.add_trace(go.Scatter(x=gens, y=ex["cv"], name="Cv",
+                                      line=dict(color="#0b7285")))
+            fig2.update_layout(height=260, yaxis_type="log",
+                               xaxis_title="Generation",
+                               yaxis_title="Cv of population cost",
+                               margin=dict(l=20, r=20, t=20, b=20))
+            st.plotly_chart(fig2, width="stretch")
+            fig3 = go.Figure()
+            fig3.add_trace(go.Scatter(x=gens, y=ex["f_mean"],
+                                      name="mean F"))
+            fig3.add_trace(go.Scatter(x=gens, y=ex["cr_mean"],
+                                      name="mean CR"))
+            fig3.update_layout(height=260, xaxis_title="Generation",
+                               yaxis_title="Population mean",
+                               margin=dict(l=20, r=20, t=20, b=20))
+            st.plotly_chart(fig3, width="stretch")
+            st.caption(
+                "Cv = std/|mean| of the population's cost (the paper's "
+                "convergence measure; the run stops when it falls below "
+                "the tolerance). Mean F and CR show how the self-adaptation "
+                "moves inside its ranges."
+            )
+
     with st.expander("Methods and references (for your paper)"):
         st.write(st_.methods_text(analysis["alpha"]))
         for r in st_.REFERENCES:
@@ -1940,6 +2085,10 @@ def _render_all_runs_tab():
                 "Run": r.run_index,
                 "Seed": r.seed,
                 "Status": r.status,
+                "Generations run": (getattr(r, "extra", {}) or {}).get(
+                    "generations"),
+                "Stopped by Cv": (getattr(r, "extra", {}) or {}).get(
+                    "converged"),
                 "NFE": getattr(r, "nfe", 0) or None,
                 "Simulations": getattr(r, "n_sim", 0) or None,
                 "NFE to best": getattr(r, "nfe_to_best", 0) or None,

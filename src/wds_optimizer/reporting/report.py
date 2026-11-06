@@ -146,6 +146,15 @@ def build_report_zip(
             runs_rows.append({
                 "Algorithm": algo, "Run": r.run_index, "Seed": r.seed,
                 "Status": r.status,
+                "Generations_run": (getattr(r, "extra", {}) or {}).get(
+                    "generations", ""),
+                "Stopped_by_Cv": (getattr(r, "extra", {}) or {}).get(
+                    "converged", ""),
+                "Stopped_by_stagnation": (getattr(r, "extra", {}) or {}).get(
+                    "stopped_by_stagnation", ""),
+                "Final_Cv": (f"{r.extra['cv'][-1]:.3e}"
+                             if (getattr(r, "extra", None) or {}).get("cv")
+                             else ""),
                 "NFE": getattr(r, "nfe", 0),
                 "Hydraulic_simulations": getattr(r, "n_sim", 0),
                 "NFE_to_best": getattr(r, "nfe_to_best", 0),
@@ -334,6 +343,24 @@ def _algorithm_param_lines(experiment, config) -> list:
         elif algo == "DE":
             out.append(f"- **DE parameters:** F = {g('de_f')}, "
                        f"CR = {g('de_cr')}, strategy = {g('de_strategy')}")
+        elif algo == "SADE":
+            stop = ("stop when Cv < " + str(g('sade_tol'))
+                    if g('sade_conv', True) else "fixed MaxGen")
+            # StagnationMax (added later than the original fields).
+            # Old experiment files that predate this field fall back to
+            # "not recorded" rather than guessing 0 or 300.
+            stag_raw = config.get('sade_stag')
+            if stag_raw is None:
+                stag_txt = ", stagnation safeguard: not recorded"
+            else:
+                stag = int(stag_raw)
+                stag_txt = (f", stagnation safeguard: {stag} generations"
+                            if stag > 0 else
+                            ", stagnation safeguard: disabled")
+            out.append(f"- **SADE parameters:** F in [{g('sade_fmin')}, "
+                       f"{g('sade_fmax')}], CR in [{g('sade_crmin')}, "
+                       f"{g('sade_crmax')}] (self-adapted per individual), "
+                       f"termination: {stop}{stag_txt}")
     return out
 
 
@@ -414,6 +441,13 @@ def _build_markdown(*, experiment, summary, best_algo, best_run_index,
                  f"{s['mean']:.0f} | {s['std']:.0f} | {s['best']:.0f} | "
                  f"{nfe} |")
     L.append("")
+    L.append("> **Note on `Stopped_by_Cv` / `Stopped_by_stagnation` "
+             "(data/runs.csv):** SADE terminates either when the "
+             "population's coefficient of variation falls below the "
+             "tolerance (`Stopped_by_Cv = True`) or when the epoch's "
+             "best cost has not improved for `StagnationMax` generations "
+             "(`Stopped_by_stagnation = True`). Other algorithms "
+             "terminate by MaxGen and report empty cells here.\n")
 
     if analysis is not None:
         L.extend(_stats_markdown(analysis))

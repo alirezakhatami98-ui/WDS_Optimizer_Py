@@ -11,6 +11,11 @@ SWEEP_PARAMETERS = {
     "PSO_c2":        "PSO social coefficient (c2)",
     "DE_F":          "DE differential weight (F)",
     "DE_CR":         "DE crossover rate (CR)",
+    "SADE_Fmin":     "SADE lower bound of F",
+    "SADE_Fmax":     "SADE upper bound of F",
+    "SADE_CRmin":    "SADE lower bound of CR",
+    "SADE_CRmax":    "SADE upper bound of CR",
+    "SADE_Tol":      "SADE convergence tolerance (Cv)",
     "NS":            "Population / swarm size",
     "MaxGen":        "Max generations / iterations",
     "NumberOfRuns":  "Runs per algorithm",
@@ -57,6 +62,16 @@ def apply_sweep_parameter(base_cfg, problem, param_name, value, n_runs):
         cfg.DE.F = float(value)
     elif param_name == "DE_CR":
         cfg.DE.CR = float(value)
+    elif param_name == "SADE_Fmin":
+        cfg.SADE.Fmin = float(value)
+    elif param_name == "SADE_Fmax":
+        cfg.SADE.Fmax = float(value)
+    elif param_name == "SADE_CRmin":
+        cfg.SADE.CRmin = float(value)
+    elif param_name == "SADE_CRmax":
+        cfg.SADE.CRmax = float(value)
+    elif param_name == "SADE_Tol":
+        cfg.SADE.Tol = float(value)
     elif param_name == "NS":
         cfg.NS = int(value)
     elif param_name == "MaxGen":

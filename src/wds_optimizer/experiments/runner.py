@@ -10,6 +10,7 @@ from ..algorithms.config import AlgorithmConfig, build_algorithm_config
 from ..algorithms.ga import GACancelled, run_ga
 from ..algorithms.pso import PSOCancelled, run_pso
 from ..algorithms.de import DECancelled, run_de
+from ..algorithms.sade import SADECancelled, run_sade
 
 
 @dataclass
@@ -30,6 +31,7 @@ class RunRecord:
     nfe: int = 0            # candidate evaluations requested (pop x gens ...)
     n_sim: int = 0          # hydraulic simulations actually run (cache misses)
     nfe_to_best: int = 0    # NFE when the final best was first found
+    extra: dict = field(default_factory=dict)   # algorithm diagnostics
 
 
 @dataclass
@@ -70,17 +72,17 @@ def run_experiment(
         NS, MaxGen, GA/PSO parameters.
     number_of_runs : int
     algorithms : list[str]
-        Subset of ``["GA", "PSO", "DE"]``.
+        Subset of ``["GA", "PSO", "DE", "SADE"]``.
     experiment_seed : int
     progress_callback : callable(info), optional
         Forwarded to each algorithm. ``info`` gains ``RunIndex``,
         ``NumberOfRuns``, ``RunLabel``, ``Algorithm``.
     cancel_callback : callable() -> bool, optional
     """
-    # Normalize and order: GA, PSO, DE
-    selected = [a for a in ("GA", "PSO", "DE") if a in algorithms]
+    # Normalize and order: GA, PSO, DE, SADE
+    selected = [a for a in ("GA", "PSO", "DE", "SADE") if a in algorithms]
     if not selected:
-        raise ValueError("At least one of GA/PSO/DE must be selected.")
+        raise ValueError("At least one of GA/PSO/DE/SADE must be selected.")
 
     # Generate per-run seeds (unique)
     rng = np.random.default_rng(experiment_seed)
@@ -130,6 +132,8 @@ def run_experiment(
             cfg.PSO.c2 = base_config.PSO.c2
             if getattr(base_config, "DE", None) is not None:
                 cfg.DE = replace(base_config.DE)
+            if getattr(base_config, "SADE", None) is not None:
+                cfg.SADE = replace(base_config.SADE)
             if getattr(base_config, "Restart", None) is not None:
                 cfg.Restart = replace(base_config.Restart)
             cfg.Seed = int(run_seeds[r])
@@ -148,7 +152,8 @@ def run_experiment(
             meta = {}                      # filled by the algorithm
             t0 = time.perf_counter()
             try:
-                algo_fn = {"GA": run_ga, "PSO": run_pso, "DE": run_de}[algo]
+                algo_fn = {"GA": run_ga, "PSO": run_pso, "DE": run_de,
+                           "SADE": run_sade}[algo]
                 score, pos, conv, feas = algo_fn(
                     problem, cfg,
                     progress_callback=per_run_cb,
@@ -165,8 +170,10 @@ def run_experiment(
                     nfe=int(meta.get("nfe", 0)),
                     n_sim=int(meta.get("n_sim", 0)),
                     nfe_to_best=int(meta.get("nfe_to_best", 0)),
+                    extra=dict(meta.get("extra", {})),
                 ))
-            except (GACancelled, PSOCancelled, DECancelled) as e:
+            except (GACancelled, PSOCancelled, DECancelled,
+                    SADECancelled) as e:
                 # If the algorithm attached its best-so-far
                 # (score, position, convergence, feasible) keep it.
                 partial = getattr(e, "partial", None)
@@ -185,6 +192,7 @@ def run_experiment(
                         nfe=int(meta.get("nfe", 0)),
                         n_sim=int(meta.get("n_sim", 0)),
                         nfe_to_best=int(meta.get("nfe_to_best", 0)),
+                        extra=dict(meta.get("extra", {})),
                     ))
                 else:
                     runs.append(RunRecord(

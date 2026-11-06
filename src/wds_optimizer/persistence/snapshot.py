@@ -35,6 +35,9 @@ def _run_to_dict(r: RunRecord) -> dict:
         "nfe": int(getattr(r, "nfe", 0)),
         "n_sim": int(getattr(r, "n_sim", 0)),
         "nfe_to_best": int(getattr(r, "nfe_to_best", 0)),
+        "extra": {k: (list(v) if isinstance(v, (list, tuple, np.ndarray))
+                      else v)
+                  for k, v in (getattr(r, "extra", {}) or {}).items()},
         # inf (no feasible design in that epoch) is stored as null
         "epoch_bests": [
             float(c) if np.isfinite(c) else None
@@ -64,6 +67,7 @@ def _dict_to_run(d: dict) -> RunRecord:
         nfe=int(d.get("nfe", 0)),                       # old files: 0
         n_sim=int(d.get("n_sim", 0)),
         nfe_to_best=int(d.get("nfe_to_best", 0)),
+        extra=dict(d.get("extra", {})),                 # old files: {}
         epoch_bests=[
             float("inf") if c is None else float(c)
             for c in d.get("epoch_bests", [])
@@ -102,6 +106,8 @@ def build_snapshot(
             "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
             "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
             "de_f", "de_cr", "de_strategy",
+            "sade_fmin", "sade_fmax", "sade_crmin", "sade_crmax",
+            "sade_conv", "sade_tol",
             "rs_enabled", "rs_patience", "rs_max", "rs_keep_best",
             "rs_mode", "rs_perturb",
         )},
