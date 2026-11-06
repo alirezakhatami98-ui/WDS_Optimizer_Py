@@ -1870,32 +1870,74 @@ def _render_sweep_stats(result):
         "Holm-adjusted. Only completed points are included."
     )
 
+def _render_design_hydraulics_tab():
+    """Merged view: best design (pipe diameters/velocities) + hydraulic
+    performance (node pressures, constraint compliance).
 
-def _render_best_design_tab():
+    Combines the old ``_render_best_design_tab`` and
+    ``_render_hydraulics_tab`` so the velocity table and velocity chart
+    live in the same context, not in two separate tabs.
+    """
     if st.session_state.experiment is None:
         st.info("Run an experiment first.")
         return
 
     snap = st.session_state.problem_snapshot
     pipe_names = snap["pipe_names"]
+    junc_names = snap["junction_names"]
     pos = st.session_state.best_position_m
-    vel = st.session_state.pipe_velocities
+    Pj_si = st.session_state.node_pressures       # meters
+    Vp_si = st.session_state.pipe_velocities      # m/s
     units = snap["Units"]
     fixed = set(int(x) for x in snap["FixedPipes"])
+    pmin_si = snap["Pmin"]
+    vmax_si = snap["Vmax"]
+
+    if Pj_si is None or Vp_si is None:
+        st.warning("Hydraulic results not available.")
+        return
+
+    p_unit = units["PressureUnit"]
     v_unit = units["VelocityUnit"]
-    v_scale = 1.0 if v_unit == "m/s" else 0.3048   # m/s -> display
     L_unit = units["LengthUnit"]
     L_scale = 1.0 if L_unit == "m" else 1.0 / 0.3048
 
-    # Build table
+    Pj = np.array([pressure_from_si(p, units) for p in Pj_si])
+    Vp = np.array([velocity_from_si(v, units) for v in Vp_si])
+    pmin = pressure_from_si(pmin_si, units)
+    vmax = velocity_from_si(vmax_si, units)
+
+    # ---- Summary metrics (at a glance) ----
+    st.subheader("Best design summary")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        st.metric("Best cost", f"{st.session_state.best_score:,.0f}")
+    with c2:
+        st.metric(
+            "Feasibility",
+            "✓ Feasible" if st.session_state.best_feasible
+            else "✗ Infeasible",
+        )
+    with c3:
+        st.metric(f"Min pressure ({p_unit})", f"{Pj.min():.2f}")
+    with c4:
+        st.metric(f"Max velocity ({v_unit})", f"{Vp.max():.2f}")
+    with c5:
+        st.metric(
+            "Hydraulics",
+            "✓ Converged" if st.session_state.hydraulics_converged
+            else "⚠ Not converged",
+        )
+
+    # ---- Pipe design (diameters + velocities in one table) ----
+    st.subheader("Pipe design")
     rows = []
     for i, name in enumerate(pipe_names):
         L = snap["L"][i]
         d_m = pos[i] if pos is not None else snap["initial_D"][i]
         d_mm = d_m * 1000
         d_in = d_m / 0.0254
-        v_si = vel[i] if vel is not None and i < len(vel) else float("nan")
-        v_disp = v_si / v_scale if v_scale else v_si
+        v_disp = Vp[i] if i < len(Vp) else float("nan")
         rows.append({
             "Pipe ID": i + 1,
             "Name": name,
@@ -1905,48 +1947,9 @@ def _render_best_design_tab():
             f"Velocity ({v_unit})": f"{v_disp:.3f}",
             "Status": "FIXED" if i in fixed else "variable",
         })
-    df = pd.DataFrame(rows)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        st.subheader("Pipe results")
-        st.dataframe(df, width="stretch", hide_index=True)
-    with c2:
-        score = st.session_state.best_score
-        feas = st.session_state.best_feasible
-        st.metric("Best cost", f"{score:,.0f}")
-        if feas:
-            st.success("Feasible design ✓")
-        else:
-            st.error("Infeasible design")
-
-
-def _render_hydraulics_tab():
-    if st.session_state.experiment is None:
-        st.info("Run an experiment first.")
-        return
-
-    snap = st.session_state.problem_snapshot
-    Pj_si = st.session_state.node_pressures       # meters
-    Vp_si = st.session_state.pipe_velocities      # m/s
-    pmin_si = snap["Pmin"]
-    vmax_si = snap["Vmax"]
-    junc_names = snap["junction_names"]
-    units = snap["Units"]
-
-    if Pj_si is None or Vp_si is None:
-        st.warning("Hydraulic results not available.")
-        return
-
-    # Convert to display units
-    p_unit = units["PressureUnit"]
-    v_unit = units["VelocityUnit"]
-    Pj = np.array([pressure_from_si(p, units) for p in Pj_si])
-    Vp = np.array([velocity_from_si(v, units) for v in Vp_si])
-    pmin = pressure_from_si(pmin_si, units)
-    vmax = velocity_from_si(vmax_si, units)
-
-    # ---- Node pressures ----
+    # ---- Node pressures (table + chart) ----
     st.subheader("Node pressures")
     rows = []
     for k, name in enumerate(junc_names):
@@ -1974,9 +1977,9 @@ def _render_hydraulics_tab():
                       margin=dict(l=20, r=20, t=20, b=20))
     st.plotly_chart(fig, width="stretch")
 
-        # ---- Pipe velocities ----
+    # ---- Pipe velocities (chart; the exact values are in the pipe table
+    # above, so we do not repeat a second table here) ----
     st.subheader("Pipe velocities")
-    pipe_names = snap["pipe_names"]
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=pipe_names, y=Vp,
@@ -1993,7 +1996,7 @@ def _render_hydraulics_tab():
     )
     st.plotly_chart(fig, width="stretch")
 
-    # ---- Status line ----
+    # ---- Status caption ----
     conv_txt = (
         "✓ Converged" if st.session_state.hydraulics_converged
         else "⚠ Not converged"
@@ -2002,7 +2005,6 @@ def _render_hydraulics_tab():
         f"Min pressure: {Pj.min():.2f} {p_unit} | "
         f"Max velocity: {Vp.max():.2f} {v_unit} | {conv_txt}"
     )
-
 
 def _render_map_tab():
     if st.session_state.inp_path is None:
@@ -2202,7 +2204,6 @@ def main():
         "📊 Summary",
         "📈 Statistics",
         "🏗 Best Design",
-        "💧 Hydraulics",
         "🗺 Network Map",
         "📋 All Runs",
         "🔍 Sweep",
@@ -2213,16 +2214,14 @@ def main():
     with tabs[1]:
         _render_statistics_tab()
     with tabs[2]:
-        _render_best_design_tab()
+        _render_design_hydraulics_tab()
     with tabs[3]:
-        _render_hydraulics_tab()
-    with tabs[4]:
         _render_map_tab()
-    with tabs[5]:
+    with tabs[4]:
         _render_all_runs_tab()
-    with tabs[6]:
+    with tabs[5]:
         _render_sweep_tab()
-    with tabs[7]:
+    with tabs[6]:
         _render_compare_tab()
 
 
