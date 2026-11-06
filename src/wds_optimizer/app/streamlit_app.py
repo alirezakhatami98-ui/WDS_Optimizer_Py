@@ -1100,6 +1100,11 @@ def _finalize_run(job: BackgroundJob):
                 + f" out of {len(runs_all)}. The results below are partial.")
     else:
         _notice("success", f"Experiment finished in {elapsed:.1f} s")
+
+    # New experiment — invalidate run-specific UI state
+    st.session_state.pop("_run_hydraulics_cache", None)
+    st.session_state.pop("selected_run", None)
+
     st.rerun()
 
 
@@ -1287,6 +1292,10 @@ def _restore_from_snapshot(data: dict):
         float(best_run["score"]) if best_run["score"] is not None
         else float("inf")
     )
+
+    # Snapshot replaces the experiment — drop per-run UI state
+    st.session_state.pop("_run_hydraulics_cache", None)
+    st.session_state.pop("selected_run", None)
 
     st.rerun()
 
@@ -1551,6 +1560,70 @@ def _pick_best_run(result: ExperimentResult):
                 best_record, best_algo = r, algo
     return best_record, best_algo
 
+def _best_cost_among_feasible(experiment) -> float:
+    """Lowest cost among feasible, successful/partial runs (+inf if none)."""
+    best = float("inf")
+    for runs in experiment.runs.values():
+        for r in runs:
+            if (r.status in ("Success", "Partial")
+                    and r.feasible
+                    and np.isfinite(r.score)):
+                best = min(best, r.score)
+    return best
+
+
+def _is_best_cost(score: float, best_cost: float, rtol: float = 1e-6) -> bool:
+    """True if ``score`` matches ``best_cost`` within relative tolerance.
+
+    A small tolerance is used because two runs that converged to the same
+    design can differ by floating-point noise; visually they are the same
+    solution and should both be flagged.
+    """
+    if not (np.isfinite(score) and np.isfinite(best_cost)):
+        return False
+    if best_cost == 0.0:
+        return score == 0.0
+    return abs(score - best_cost) <= rtol * abs(best_cost)
+
+
+def _format_run_option(algo: str, run, is_best: bool) -> str:
+    """Dropdown label: ``⭐ GA / run 3 — 38,642,000  (✓ Success)``."""
+    star = "⭐ " if is_best else "   "
+    feas = "✓" if run.feasible else "✗"
+    cost = f"{run.score:,.0f}" if np.isfinite(run.score) else "—"
+    return f"{star}{algo} / run {run.run_index} — {cost}  ({feas} {run.status})"
+
+
+def _get_run_hydraulics(algo: str, run_index: int):
+    """Compute (or fetch from cache) the hydraulics of one run.
+
+    Cache is stored in ``st.session_state["_run_hydraulics_cache"]`` and
+    invalidated in ``_finalize_run`` / ``_restore_from_snapshot`` so a new
+    experiment never returns stale pressures.  The diameter vector is
+    reconstructed with the same round-trip as ``_finalize_run`` so the
+    numbers agree exactly with what the "best" path used.
+    """
+    cache = st.session_state.setdefault("_run_hydraulics_cache", {})
+    key = (algo, int(run_index))
+    if key in cache:
+        return cache[key]
+
+    experiment = st.session_state.experiment
+    snap = st.session_state.problem_snapshot
+    run = experiment.runs[algo][run_index - 1]
+
+    full_D = snap["initial_D"].copy()
+    var_idx = _position_to_indices(run.position, {
+        "D": snap["D_m"], "VariablePipes": snap["VariablePipes"],
+    })
+    full_D[snap["VariablePipes"]] = snap["D_m"][var_idx]
+
+    wn = _load_network(st.session_state.inp_path)
+    Pj, Vp, ok = run_hydraulic_simulation(
+        wn, full_D, snap["pipe_names"], snap["junction_names"]
+    )
+    cache[key] = (Pj, Vp, ok)
+    return Pj, Vp, ok
 
 def _position_to_indices(position_m: np.ndarray, problem) -> np.ndarray:
     """Convert a full-diameter vector (m) to option indices (0-based)."""
@@ -1871,52 +1944,105 @@ def _render_sweep_stats(result):
     )
 
 def _render_design_hydraulics_tab():
-    """Merged view: best design (pipe diameters/velocities) + hydraulic
-    performance (node pressures, constraint compliance).
+    """Inspect a single run: pipe diameters, velocities, node pressures.
 
-    Combines the old ``_render_best_design_tab`` and
-    ``_render_hydraulics_tab`` so the velocity table and velocity chart
-    live in the same context, not in two separate tabs.
+    Defaults to the overall best run; the dropdown at the top lets the
+    user inspect any other run.  A ⭐ marker flags runs that match the
+    global best cost so users can spot ties at a glance.
     """
     if st.session_state.experiment is None:
         st.info("Run an experiment first.")
         return
 
+    experiment = st.session_state.experiment
     snap = st.session_state.problem_snapshot
+    if snap is None:
+        st.warning("Problem snapshot not available — re-run the experiment.")
+        return
+
+    units = snap["Units"]
     pipe_names = snap["pipe_names"]
     junc_names = snap["junction_names"]
-    pos = st.session_state.best_position_m
-    Pj_si = st.session_state.node_pressures       # meters
-    Vp_si = st.session_state.pipe_velocities      # m/s
-    units = snap["Units"]
     fixed = set(int(x) for x in snap["FixedPipes"])
     pmin_si = snap["Pmin"]
     vmax_si = snap["Vmax"]
-
-    if Pj_si is None or Vp_si is None:
-        st.warning("Hydraulic results not available.")
-        return
-
     p_unit = units["PressureUnit"]
     v_unit = units["VelocityUnit"]
     L_unit = units["LengthUnit"]
     L_scale = 1.0 if L_unit == "m" else 1.0 / 0.3048
-
-    Pj = np.array([pressure_from_si(p, units) for p in Pj_si])
-    Vp = np.array([velocity_from_si(v, units) for v in Vp_si])
     pmin = pressure_from_si(pmin_si, units)
     vmax = velocity_from_si(vmax_si, units)
 
-    # ---- Summary metrics (at a glance) ----
-    st.subheader("Best design summary")
+    # ---- Enumerate inspectable runs (skip Failed) ----
+    all_runs: list[tuple[str, object]] = []
+    for algo in experiment.algorithms:
+        for r in experiment.runs.get(algo, []):
+            if r.status not in ("Success", "Partial"):
+                continue
+            all_runs.append((algo, r))
+    if not all_runs:
+        st.info("No completed runs to inspect.")
+        return
+
+    best_cost = _best_cost_among_feasible(experiment)
+    valid_keys = {(a, r.run_index) for a, r in all_runs}
+
+    # ---- Ensure a valid selection; default to the overall best ----
+    sel = st.session_state.get("selected_run")
+    if sel not in valid_keys:
+        preferred = (st.session_state.get("best_algo"),
+                     st.session_state.get("best_run_index"))
+        if preferred in valid_keys:
+            st.session_state.selected_run = preferred
+        else:
+            st.session_state.selected_run = (
+                all_runs[0][0], all_runs[0][1].run_index
+            )
+
+    st.subheader("Select a run")
+    st.selectbox(
+        "Run",
+        options=[(a, r.run_index) for a, r in all_runs],
+        format_func=lambda k: _format_run_option(
+            k[0], experiment.runs[k[0]][k[1] - 1],
+            is_best=_is_best_cost(
+                experiment.runs[k[0]][k[1] - 1].score, best_cost),
+        ),
+        key="selected_run",
+        label_visibility="collapsed",
+    )
+    st.caption("⭐ marks runs that match the global best cost.")
+
+    algo, run_index = st.session_state.selected_run
+    run = experiment.runs[algo][run_index - 1]
+
+    # ---- Hydraulics for the selected run (cached) ----
+    try:
+        Pj_si, Vp_si, conv_ok = _get_run_hydraulics(algo, run_index)
+    except Exception as e:
+        st.error(f"Could not compute hydraulics: {type(e).__name__}: {e}")
+        return
+    if Pj_si is None or Vp_si is None:
+        st.warning("Hydraulic results not available for this run.")
+        return
+
+    Pj = np.array([pressure_from_si(p, units) for p in Pj_si])
+    Vp = np.array([velocity_from_si(v, units) for v in Vp_si])
+
+    # ---- Summary ----
+    is_star = _is_best_cost(run.score, best_cost)
+    title = f"Summary — {algo} / run {run_index}"
+    if is_star:
+        title += "   ⭐ best-known"
+    st.subheader(title)
+
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
-        st.metric("Best cost", f"{st.session_state.best_score:,.0f}")
+        st.metric("Cost", f"{run.score:,.0f}" if np.isfinite(run.score) else "—")
     with c2:
         st.metric(
             "Feasibility",
-            "✓ Feasible" if st.session_state.best_feasible
-            else "✗ Infeasible",
+            "✓ Feasible" if run.feasible else "✗ Infeasible",
         )
     with c3:
         st.metric(f"Min pressure ({p_unit})", f"{Pj.min():.2f}")
@@ -1925,25 +2051,23 @@ def _render_design_hydraulics_tab():
     with c5:
         st.metric(
             "Hydraulics",
-            "✓ Converged" if st.session_state.hydraulics_converged
-            else "⚠ Not converged",
+            "✓ Converged" if conv_ok else "⚠ Not converged",
         )
 
     # ---- Pipe design (diameters + velocities in one table) ----
     st.subheader("Pipe design")
+    pos = run.position
     rows = []
     for i, name in enumerate(pipe_names):
         L = snap["L"][i]
         d_m = pos[i] if pos is not None else snap["initial_D"][i]
-        d_mm = d_m * 1000
-        d_in = d_m / 0.0254
         v_disp = Vp[i] if i < len(Vp) else float("nan")
         rows.append({
             "Pipe ID": i + 1,
             "Name": name,
             f"Length ({L_unit})": f"{L / L_scale:.0f}",
-            "Diameter (mm)": f"{d_mm:.1f}",
-            "Diameter (in)": f"{d_in:.2f}",
+            "Diameter (mm)": f"{d_m * 1000:.1f}",
+            "Diameter (in)": f"{d_m / 0.0254:.2f}",
             f"Velocity ({v_unit})": f"{v_disp:.3f}",
             "Status": "FIXED" if i in fixed else "variable",
         })
@@ -1953,22 +2077,25 @@ def _render_design_hydraulics_tab():
     st.subheader("Node pressures")
     rows = []
     for k, name in enumerate(junc_names):
-        # compare in SI to avoid floating-point drift
         violation = Pj_si[k] < pmin_si
         rows.append({
             "Node ID": k + 1,
             "Name": name,
             f"Pressure ({p_unit})": f"{Pj[k]:.3f}",
-            "Status": f"Violation (<{pmin:.2f} {p_unit})"
-                      if violation else "OK",
+            "Status": (
+                f"Violation (<{pmin:.2f} {p_unit})"
+                if violation else "OK"
+            ),
         })
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=junc_names, y=Pj,
-        marker_color=["#e74c3c" if Pj_si[i] < pmin_si else "#2ecc71"
-                      for i in range(len(Pj))],
+        marker_color=[
+            "#e74c3c" if Pj_si[i] < pmin_si else "#2ecc71"
+            for i in range(len(Pj))
+        ],
         text=[f"{p:.2f}" for p in Pj], textposition="outside",
     ))
     fig.add_hline(y=pmin, line_dash="dash", line_color="red",
@@ -1977,33 +2104,30 @@ def _render_design_hydraulics_tab():
                       margin=dict(l=20, r=20, t=20, b=20))
     st.plotly_chart(fig, width="stretch")
 
-    # ---- Pipe velocities (chart; the exact values are in the pipe table
-    # above, so we do not repeat a second table here) ----
+    # ---- Pipe velocities (chart; exact values already in the pipe table) ----
     st.subheader("Pipe velocities")
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=pipe_names, y=Vp,
-        marker_color=["#e74c3c" if Vp_si[i] > vmax_si else "#3498db"
-                      for i in range(len(Vp))],
+        marker_color=[
+            "#e74c3c" if Vp_si[i] > vmax_si else "#3498db"
+            for i in range(len(Vp))
+        ],
         text=[f"{v:.2f}" for v in Vp], textposition="outside",
     ))
     fig.add_hline(y=vmax, line_dash="dash", line_color="red",
                   annotation_text=f"Vmax = {vmax:.2f} {v_unit}")
     fig.update_layout(
-        height=320,
-        yaxis_title=f"Velocity ({v_unit})",
+        height=320, yaxis_title=f"Velocity ({v_unit})",
         margin=dict(l=20, r=20, t=20, b=20),
     )
     st.plotly_chart(fig, width="stretch")
 
     # ---- Status caption ----
-    conv_txt = (
-        "✓ Converged" if st.session_state.hydraulics_converged
-        else "⚠ Not converged"
-    )
     st.caption(
         f"Min pressure: {Pj.min():.2f} {p_unit} | "
-        f"Max velocity: {Vp.max():.2f} {v_unit} | {conv_txt}"
+        f"Max velocity: {Vp.max():.2f} {v_unit} | "
+        + ("✓ Converged" if conv_ok else "⚠ Not converged")
     )
 
 def _render_map_tab():
@@ -2079,11 +2203,15 @@ def _render_all_runs_tab():
         return
 
     result = st.session_state.experiment
+    best_cost = _best_cost_among_feasible(result)
     rows = []
     for algo, runs in result.runs.items():
         for r in runs:
             rows.append({
                 "Algorithm": algo,
+                "Best": (
+                    "⭐" if _is_best_cost(r.score, best_cost) else ""
+                ),
                 "Run": r.run_index,
                 "Seed": r.seed,
                 "Status": r.status,
@@ -2203,7 +2331,7 @@ def main():
     tabs = st.tabs([
         "📊 Summary",
         "📈 Statistics",
-        "🏗 Best Design",
+        "🔎 Run Inspector",
         "🗺 Network Map",
         "📋 All Runs",
         "🔍 Sweep",
