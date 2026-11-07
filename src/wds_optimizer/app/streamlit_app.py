@@ -24,6 +24,7 @@ class _SuppressWinError10054(logging.Filter):
 logging.getLogger("asyncio").addFilter(_SuppressWinError10054())
 
 
+import copy
 import io
 import tempfile
 import time
@@ -79,19 +80,57 @@ st.set_page_config(
 
 
 @st.cache_resource
+def _load_network_cached(inp_path: str):
+    """Parse and cache the WNTR network model by path.
+
+    This is the *pristine* parse.  Callers should use ``_load_network``
+    (below), never this function directly, so that each experiment gets
+    its own mutable copy.
+    """
+    return wntr.network.WaterNetworkModel(inp_path)
+
+
 def _load_network(inp_path: str):
-    """Load (and cache) a WNTR network model."""
-    wn = wntr.network.WaterNetworkModel(inp_path)
-    return wn
+    """Return a fresh, isolated copy of the network model.
+
+    ``run_hydraulic_simulation`` mutates pipe diameters on the model it
+    is given, and some WNTR versions also touch pattern / control /
+    units state during ``EpanetSimulator.run_sim``.  Returning the
+    cached object directly would let those mutations leak into the
+    *next* experiment (observed bug: Hanoi → Duhala → Hanoi fails, the
+    second Hanoi run starts from the first run's final diameters).
+
+    A deep copy of a few-hundred-pipe model takes ~1 ms — negligible
+    next to a single hydraulic solve.
+    """
+    return copy.deepcopy(_load_network_cached(inp_path))
 
 
 @st.cache_data(show_spinner=False)
 def _read_uploaded(uploaded_bytes: bytes, name: str) -> str:
-    """Save uploaded bytes to a stable temp file and return the path."""
+    """Save uploaded bytes to a content-addressed temp file; return path.
+
+    The filename embeds a hash of the content, so:
+
+    * Same bytes → same path (safe under @st.cache_data — a hit returns
+      a path whose file still holds the right content).
+    * Different bytes → different path (uploads of same-named files for
+      different networks never overwrite each other).
+
+    Without this, uploading ``D.txt`` for network A, then for network B,
+    then for A again hit the cache on the third call (A → B → A) and
+    returned a path whose file had been overwritten by B; the third A
+    run then read B's diameters/costs while loading A's .inp, yielding
+    infeasible non-converging results with no error.
+    """
+    import hashlib
     tmpdir = Path(tempfile.gettempdir()) / "wds_optimizer_uploads"
     tmpdir.mkdir(parents=True, exist_ok=True)
-    p = tmpdir / name
-    p.write_bytes(uploaded_bytes)
+    digest = hashlib.sha256(uploaded_bytes).hexdigest()[:16]
+    stem = Path(name).stem
+    suffix = Path(name).suffix
+    p = tmpdir / f"{stem}_{digest}{suffix}"
+    p.write_bytes(uploaded_bytes)   # only runs on cache miss
     return str(p)
 
 @st.cache_data(show_spinner=False)
@@ -1113,6 +1152,17 @@ def _finalize_run(job: BackgroundJob):
                 + f" out of {len(runs_all)}. The results below are partial.")
     else:
         _notice("success", f"Experiment finished in {elapsed:.1f} s")
+
+    # Release the EPANET toolkit project (and its temp folder) that the
+    # fast solver held open during the run.  Without this the handle can
+    # linger in memory until GC, and starting a new experiment then
+    # leaves two EPANET projects open simultaneously.
+    try:
+        solver = ctx["problem"].get("_solver")
+        if solver:
+            solver.close()
+    except Exception:
+        pass
 
     # New experiment — invalidate run-specific UI state
     _clear_run_ui_state()
