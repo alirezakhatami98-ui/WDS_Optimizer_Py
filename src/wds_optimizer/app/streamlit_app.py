@@ -1102,8 +1102,7 @@ def _finalize_run(job: BackgroundJob):
         _notice("success", f"Experiment finished in {elapsed:.1f} s")
 
     # New experiment — invalidate run-specific UI state
-    st.session_state.pop("_run_hydraulics_cache", None)
-    st.session_state.pop("selected_run", None)
+    _clear_run_ui_state()
 
     st.rerun()
 
@@ -1294,8 +1293,7 @@ def _restore_from_snapshot(data: dict):
     )
 
     # Snapshot replaces the experiment — drop per-run UI state
-    st.session_state.pop("_run_hydraulics_cache", None)
-    st.session_state.pop("selected_run", None)
+    _clear_run_ui_state()
 
     st.rerun()
 
@@ -1560,6 +1558,20 @@ def _pick_best_run(result: ExperimentResult):
                 best_record, best_algo = r, algo
     return best_record, best_algo
 
+def _clear_run_ui_state():
+    """Drop per-run UI state whenever the experiment is replaced.
+
+    ``selected_run`` (the current dropdown selection), the on-demand
+    hydraulics cache and every per-widget ``_sync_marker_*`` must all
+    reset together — otherwise a new experiment would briefly render
+    with data from the previous one.
+    """
+    st.session_state.pop("selected_run", None)
+    st.session_state.pop("_run_hydraulics_cache", None)
+    for k in [k for k in st.session_state.keys()
+              if k.startswith("_sync_marker_")]:
+        st.session_state.pop(k, None)
+
 def _best_cost_among_feasible(experiment) -> float:
     """Lowest cost among feasible, successful/partial runs (+inf if none)."""
     best = float("inf")
@@ -1624,6 +1636,116 @@ def _get_run_hydraulics(algo: str, run_index: int):
     )
     cache[key] = (Pj, Vp, ok)
     return Pj, Vp, ok
+
+def _render_run_selector(widget_key: str):
+    """Render the run-selector dropdown and keep it synced across tabs.
+
+    ``selected_run`` (a plain session_state key, NOT a widget key) is the
+    single source of truth.  ``widget_key`` names this tab's dropdown
+    (distinct per tab to avoid DuplicateWidgetID).  ``_sync_marker_{key}``
+    records the value we last pushed into the widget, so that a change
+    made in the *other* tab's dropdown is detected and pushed here on
+    the next render, without overriding the user's just-made choice in
+    *this* dropdown.
+
+    Returns ``(algo, run_index, run_record, best_cost)`` or
+    ``(None, None, None, None)`` if there is nothing to inspect.
+    """
+    experiment = st.session_state.experiment
+    if experiment is None:
+        return None, None, None, None
+
+    all_runs = [
+        (a, r)
+        for a in experiment.algorithms
+        for r in experiment.runs.get(a, [])
+        if r.status in ("Success", "Partial")
+    ]
+    if not all_runs:
+        return None, None, None, None
+
+    best_cost = _best_cost_among_feasible(experiment)
+    valid_keys = {(a, r.run_index) for a, r in all_runs}
+
+    # Default selection if missing or invalid (e.g. first visit after a
+    # new experiment, or after loading a snapshot).
+    if st.session_state.get("selected_run") not in valid_keys:
+        preferred = (st.session_state.get("best_algo"),
+                     st.session_state.get("best_run_index"))
+        st.session_state.selected_run = (
+            preferred if preferred in valid_keys
+            else (all_runs[0][0], all_runs[0][1].run_index)
+        )
+
+    # Push selected_run into this widget only when selected_run changed
+    # since the last time we synced it here — this is what makes two
+    # dropdowns in different tabs stay in step without clobbering the
+    # one the user just used.
+    marker = f"_sync_marker_{widget_key}"
+    if st.session_state.get(marker) != st.session_state.selected_run:
+        st.session_state[widget_key] = st.session_state.selected_run
+        st.session_state[marker] = st.session_state.selected_run
+
+    def _on_change():
+        st.session_state.selected_run = st.session_state[widget_key]
+
+    st.selectbox(
+        "Run",
+        options=[(a, r.run_index) for a, r in all_runs],
+        format_func=lambda k: _format_run_option(
+            k[0], experiment.runs[k[0]][k[1] - 1],
+            is_best=_is_best_cost(
+                experiment.runs[k[0]][k[1] - 1].score, best_cost),
+        ),
+        key=widget_key,
+        on_change=_on_change,
+        label_visibility="collapsed",
+    )
+    st.caption("⭐ marks runs that match the global best cost.")
+
+    algo, run_index = st.session_state.selected_run
+    return algo, run_index, experiment.runs[algo][run_index - 1], best_cost
+
+
+def _render_run_summary(algo, run_index, run, best_cost, units,
+                        Pj_si, Vp_si, conv_ok):
+    """Summary metric cards + convergence banner (shared by both tabs).
+
+    Four compact metric cards in one row plus a full-width banner.  This
+    replaces the previous five-column layout, which clipped the
+    Hydraulics card on standard screen widths.
+    """
+    p_unit = units["PressureUnit"]
+    v_unit = units["VelocityUnit"]
+    Pj = np.array([pressure_from_si(p, units) for p in Pj_si])
+    Vp = np.array([velocity_from_si(v, units) for v in Vp_si])
+
+    is_star = _is_best_cost(run.score, best_cost)
+    title = f"Summary — {algo} / run {run_index}"
+    if is_star:
+        title += "   ⭐ best-known"
+    st.subheader(title)
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric(
+            "Cost",
+            f"{run.score:,.0f}" if np.isfinite(run.score) else "—",
+        )
+    with c2:
+        st.metric(
+            "Feasibility",
+            "✓ Feasible" if run.feasible else "✗ Infeasible",
+        )
+    with c3:
+        st.metric(f"Min pressure ({p_unit})", f"{Pj.min():.2f}")
+    with c4:
+        st.metric(f"Max velocity ({v_unit})", f"{Vp.max():.2f}")
+
+    if conv_ok:
+        st.success("✓ Hydraulics converged")
+    else:
+        st.warning("⚠ Hydraulics did not converge")
 
 def _position_to_indices(position_m: np.ndarray, problem) -> np.ndarray:
     """Convert a full-diameter vector (m) to option indices (0-based)."""
@@ -1947,14 +2069,13 @@ def _render_design_hydraulics_tab():
     """Inspect a single run: pipe diameters, velocities, node pressures.
 
     Defaults to the overall best run; the dropdown at the top lets the
-    user inspect any other run.  A ⭐ marker flags runs that match the
-    global best cost so users can spot ties at a glance.
+    user inspect any other run.  ⭐ markers flag runs that match the
+    global best cost.
     """
     if st.session_state.experiment is None:
         st.info("Run an experiment first.")
         return
 
-    experiment = st.session_state.experiment
     snap = st.session_state.problem_snapshot
     if snap is None:
         st.warning("Problem snapshot not available — re-run the experiment.")
@@ -1973,50 +2094,14 @@ def _render_design_hydraulics_tab():
     pmin = pressure_from_si(pmin_si, units)
     vmax = velocity_from_si(vmax_si, units)
 
-    # ---- Enumerate inspectable runs (skip Failed) ----
-    all_runs: list[tuple[str, object]] = []
-    for algo in experiment.algorithms:
-        for r in experiment.runs.get(algo, []):
-            if r.status not in ("Success", "Partial"):
-                continue
-            all_runs.append((algo, r))
-    if not all_runs:
+    st.subheader("Select a run")
+    algo, run_index, run, best_cost = _render_run_selector(
+        "run_inspector_selector"
+    )
+    if algo is None:
         st.info("No completed runs to inspect.")
         return
 
-    best_cost = _best_cost_among_feasible(experiment)
-    valid_keys = {(a, r.run_index) for a, r in all_runs}
-
-    # ---- Ensure a valid selection; default to the overall best ----
-    sel = st.session_state.get("selected_run")
-    if sel not in valid_keys:
-        preferred = (st.session_state.get("best_algo"),
-                     st.session_state.get("best_run_index"))
-        if preferred in valid_keys:
-            st.session_state.selected_run = preferred
-        else:
-            st.session_state.selected_run = (
-                all_runs[0][0], all_runs[0][1].run_index
-            )
-
-    st.subheader("Select a run")
-    st.selectbox(
-        "Run",
-        options=[(a, r.run_index) for a, r in all_runs],
-        format_func=lambda k: _format_run_option(
-            k[0], experiment.runs[k[0]][k[1] - 1],
-            is_best=_is_best_cost(
-                experiment.runs[k[0]][k[1] - 1].score, best_cost),
-        ),
-        key="selected_run",
-        label_visibility="collapsed",
-    )
-    st.caption("⭐ marks runs that match the global best cost.")
-
-    algo, run_index = st.session_state.selected_run
-    run = experiment.runs[algo][run_index - 1]
-
-    # ---- Hydraulics for the selected run (cached) ----
     try:
         Pj_si, Vp_si, conv_ok = _get_run_hydraulics(algo, run_index)
     except Exception as e:
@@ -2029,30 +2114,8 @@ def _render_design_hydraulics_tab():
     Pj = np.array([pressure_from_si(p, units) for p in Pj_si])
     Vp = np.array([velocity_from_si(v, units) for v in Vp_si])
 
-    # ---- Summary ----
-    is_star = _is_best_cost(run.score, best_cost)
-    title = f"Summary — {algo} / run {run_index}"
-    if is_star:
-        title += "   ⭐ best-known"
-    st.subheader(title)
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        st.metric("Cost", f"{run.score:,.0f}" if np.isfinite(run.score) else "—")
-    with c2:
-        st.metric(
-            "Feasibility",
-            "✓ Feasible" if run.feasible else "✗ Infeasible",
-        )
-    with c3:
-        st.metric(f"Min pressure ({p_unit})", f"{Pj.min():.2f}")
-    with c4:
-        st.metric(f"Max velocity ({v_unit})", f"{Vp.max():.2f}")
-    with c5:
-        st.metric(
-            "Hydraulics",
-            "✓ Converged" if conv_ok else "⚠ Not converged",
-        )
+    _render_run_summary(algo, run_index, run, best_cost, units,
+                        Pj_si, Vp_si, conv_ok)
 
     # ---- Pipe design (diameters + velocities in one table) ----
     st.subheader("Pipe design")
@@ -2104,7 +2167,7 @@ def _render_design_hydraulics_tab():
                       margin=dict(l=20, r=20, t=20, b=20))
     st.plotly_chart(fig, width="stretch")
 
-    # ---- Pipe velocities (chart; exact values already in the pipe table) ----
+    # ---- Pipe velocities (chart; exact values in the pipe table above) ----
     st.subheader("Pipe velocities")
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -2123,7 +2186,6 @@ def _render_design_hydraulics_tab():
     )
     st.plotly_chart(fig, width="stretch")
 
-    # ---- Status caption ----
     st.caption(
         f"Min pressure: {Pj.min():.2f} {p_unit} | "
         f"Max velocity: {Vp.max():.2f} {v_unit} | "
@@ -2134,6 +2196,39 @@ def _render_map_tab():
     if st.session_state.inp_path is None:
         st.info("Load an .inp file first.")
         return
+
+    experiment = st.session_state.experiment
+    snap = st.session_state.problem_snapshot
+
+    # Default values used in preview mode (no experiment yet)
+    pos = None
+    Pj_si = None
+    Vp_si = None
+
+    if experiment is not None and snap is not None:
+        st.subheader("Select a run to display")
+        algo, run_index, run, best_cost = _render_run_selector(
+            "map_run_selector"
+        )
+        if algo is None:
+            st.info("No completed runs to display.")
+            return
+
+        try:
+            Pj_si, Vp_si, conv_ok = _get_run_hydraulics(algo, run_index)
+        except Exception as e:
+            st.error(
+                f"Could not compute hydraulics: {type(e).__name__}: {e}"
+            )
+            return
+        if Pj_si is None or Vp_si is None:
+            st.warning("Hydraulic results not available for this run.")
+            return
+
+        _render_run_summary(algo, run_index, run, best_cost,
+                            snap["Units"], Pj_si, Vp_si, conv_ok)
+        pos = run.position
+        st.divider()
 
     mode = st.selectbox(
         "Display mode",
@@ -2149,21 +2244,16 @@ def _render_map_tab():
     show_labels = st.checkbox("Show node labels", value=False)
 
     wn = _load_network(st.session_state.inp_path)
+    units = st.session_state.get("network_units") or {}
 
-    # Compute coloring data (in display units)
+    # Compute coloring data (in display units) for the selected run
     pressures = None
     velocities = None
     diameters = None
     pmin = vmax = None
     fixed_1based = []
-    units = st.session_state.get("network_units") or {}
 
-    if st.session_state.experiment is not None:
-        snap = st.session_state.problem_snapshot
-        Pj_si = st.session_state.node_pressures
-        Vp_si = st.session_state.pipe_velocities
-        pos = st.session_state.best_position_m
-
+    if experiment is not None and snap is not None and pos is not None:
         pressures = {
             n: pressure_from_si(p, units)
             for n, p in zip(snap["junction_names"], Pj_si)
@@ -2186,11 +2276,11 @@ def _render_map_tab():
         pmin=pmin, vmax=vmax,
         fixed_pipe_indices=fixed_1based,
         show_labels=show_labels,
-        units=units,                    # ← جدید
+        units=units,
     )
     st.plotly_chart(fig, width="stretch")
 
-    if st.session_state.experiment is None:
+    if experiment is None:
         st.caption(
             "Preview mode: network topology only. "
             "Run an experiment to see velocity/pressure/diameter coloring."
