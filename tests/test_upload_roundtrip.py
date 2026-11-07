@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 import streamlit as st
@@ -33,12 +32,12 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 # Import the function under test.
 #
-# ``streamlit_app.py`` calls ``st.set_page_config`` at import time, which
-# raises outside a Streamlit run.  Patch it *only during import*; once the
-# module is loaded, its other top-level statements have already run.
+# ``wds_optimizer.app.uploads`` is a deliberately light module: it imports
+# only streamlit, hashlib, tempfile and pathlib — not wntr, plotly or any
+# algorithm module.  No ``st.set_page_config`` patch is needed because
+# this module has no top-level Streamlit calls beyond the decorator.
 # ---------------------------------------------------------------------------
-with patch("streamlit.set_page_config"):
-    from wds_optimizer.app.streamlit_app import _read_uploaded
+from wds_optimizer.app.uploads import read_uploaded
 
 
 # ---------------------------------------------------------------------------
@@ -75,16 +74,16 @@ def clear_streamlit_cache():
 
 def test_same_content_same_path():
     """Same bytes + same name → same path (correct cache hit)."""
-    path1 = _read_uploaded(b"identical bytes", "D.txt")
-    path2 = _read_uploaded(b"identical bytes", "D.txt")
+    path1 = read_uploaded(b"identical bytes", "D.txt")
+    path2 = read_uploaded(b"identical bytes", "D.txt")
     assert path1 == path2
     assert Path(path1).read_bytes() == b"identical bytes"
 
 
 def test_different_content_different_path():
     """Different bytes + same name → different paths (no overwrite)."""
-    path_a = _read_uploaded(b"network A diameters", "D.txt")
-    path_b = _read_uploaded(b"network B diameters", "D.txt")
+    path_a = read_uploaded(b"network A diameters", "D.txt")
+    path_b = read_uploaded(b"network B diameters", "D.txt")
     assert path_a != path_b
     assert Path(path_a).read_bytes() == b"network A diameters"
     assert Path(path_b).read_bytes() == b"network B diameters"
@@ -92,7 +91,7 @@ def test_different_content_different_path():
 
 def test_filename_preserves_extension_and_stem():
     """The destination still ends in the original suffix."""
-    p = _read_uploaded(b"payload", "weird.name.with.dots.txt")
+    p = read_uploaded(b"payload", "weird.name.with.dots.txt")
     assert p.endswith(".txt")
     assert "weird.name.with.dots_" in Path(p).name
 
@@ -117,9 +116,9 @@ def test_a_b_a_content_roundtrip():
     a_bytes = b"network A: 254,254,406,406,508"
     b_bytes = b"network B: 100,150,200"
 
-    path_a1 = _read_uploaded(a_bytes, "D.txt")
-    path_b  = _read_uploaded(b_bytes, "D.txt")
-    path_a2 = _read_uploaded(a_bytes, "D.txt")   # cache hit in old code
+    path_a1 = read_uploaded(a_bytes, "D.txt")
+    path_b  = read_uploaded(b_bytes, "D.txt")
+    path_a2 = read_uploaded(a_bytes, "D.txt")   # cache hit in old code
 
     # 1. Caching still works
     assert path_a1 == path_a2
@@ -156,7 +155,7 @@ def test_multi_file_upload_sequence_a_b_a():
     written = {}
     for label, files in (("A", files_a), ("B", files_b), ("A2", files_a)):
         written[label] = {
-            name: _read_uploaded(data, name) for name, data in files.items()
+            name: read_uploaded(data, name) for name, data in files.items()
         }
 
     # Content integrity at every destination

@@ -55,6 +55,7 @@ from wds_optimizer.hydraulics.units import (
 from wds_optimizer.optimization.problem import build_optimization_problem
 from wds_optimizer.app.network_map import build_network_figure
 from wds_optimizer.app.state import init_state, reset_experiment
+from wds_optimizer.app.uploads import read_uploaded
 from wds_optimizer.app.jobs import BackgroundJob
 from wds_optimizer.analysis import stats as st_
 from wds_optimizer.persistence.snapshot import (
@@ -105,33 +106,6 @@ def _load_network(inp_path: str):
     """
     return copy.deepcopy(_load_network_cached(inp_path))
 
-
-@st.cache_data(show_spinner=False)
-def _read_uploaded(uploaded_bytes: bytes, name: str) -> str:
-    """Save uploaded bytes to a content-addressed temp file; return path.
-
-    The filename embeds a hash of the content, so:
-
-    * Same bytes → same path (safe under @st.cache_data — a hit returns
-      a path whose file still holds the right content).
-    * Different bytes → different path (uploads of same-named files for
-      different networks never overwrite each other).
-
-    Without this, uploading ``D.txt`` for network A, then for network B,
-    then for A again hit the cache on the third call (A → B → A) and
-    returned a path whose file had been overwritten by B; the third A
-    run then read B's diameters/costs while loading A's .inp, yielding
-    infeasible non-converging results with no error.
-    """
-    import hashlib
-    tmpdir = Path(tempfile.gettempdir()) / "wds_optimizer_uploads"
-    tmpdir.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha256(uploaded_bytes).hexdigest()[:16]
-    stem = Path(name).stem
-    suffix = Path(name).suffix
-    p = tmpdir / f"{stem}_{digest}{suffix}"
-    p.write_bytes(uploaded_bytes)   # only runs on cache miss
-    return str(p)
 
 @st.cache_data(show_spinner=False)
 def _get_network_units(inp_path: str):
@@ -292,9 +266,9 @@ def _render_sidebar():
         )
 
         if inp_upload and d_upload and cost_upload:
-            inp_path = _read_uploaded(inp_upload.getvalue(), inp_upload.name)
-            d_path = _read_uploaded(d_upload.getvalue(), d_upload.name)
-            cost_path = _read_uploaded(
+            inp_path = read_uploaded(inp_upload.getvalue(), inp_upload.name)
+            d_path = read_uploaded(d_upload.getvalue(), d_upload.name)
+            cost_path = read_uploaded(
                 cost_upload.getvalue(), cost_upload.name
             )
             st.session_state.inp_path = inp_path
