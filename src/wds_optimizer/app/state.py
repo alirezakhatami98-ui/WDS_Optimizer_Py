@@ -17,6 +17,7 @@ _KEYS = {
     "n_runs": 3, "exp_seed": 1,
     "rs_enabled": False, "rs_patience": 30, "rs_max": 3,
     "rs_keep_best": False, "rs_mode": "perturb", "rs_perturb": 0.3,
+    "only_feasible": False,
     "experiment": None,
     "best_algo": None, "best_run_index": None,
     "best_position_m": None, "best_score": None, "best_feasible": False,

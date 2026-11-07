@@ -541,6 +541,19 @@ def _render_sidebar():
                     d_content=d_content,
                     cost_content=cost_content,
                 )
+                # UI state is not part of the experiment itself; record
+                # it under an optional "ui" key so older saves (which
+                # lack it) remain loadable and newer loads can restore
+                # the user's last view.
+                ui_state: dict = {}
+                if st.session_state.get("selected_run"):
+                    ui_state["selected_run"] = list(
+                        st.session_state.selected_run)
+                if "only_feasible" in st.session_state:
+                    ui_state["only_feasible"] = bool(
+                        st.session_state.only_feasible)
+                if ui_state:
+                    snap["ui"] = ui_state
                 import json as _json
                 st.download_button(
                     "💾 Save experiment (.json)",
@@ -1292,8 +1305,17 @@ def _restore_from_snapshot(data: dict):
         else float("inf")
     )
 
-    # Snapshot replaces the experiment — drop per-run UI state
+    # Snapshot replaces the experiment — drop per-run UI state, then
+    # restore the snapshot's saved UI preferences (if any). Older
+    # snapshots have no "ui" key and leave the current preferences
+    # untouched.
     _clear_run_ui_state()
+    saved_ui = data.get("ui", {}) or {}
+    sel = saved_ui.get("selected_run")
+    if isinstance(sel, (list, tuple)) and len(sel) == 2:
+        st.session_state.selected_run = (str(sel[0]), int(sel[1]))
+    if "only_feasible" in saved_ui:
+        st.session_state.only_feasible = bool(saved_ui["only_feasible"])
 
     st.rerun()
 
@@ -1569,8 +1591,12 @@ def _clear_run_ui_state():
     st.session_state.pop("selected_run", None)
     st.session_state.pop("_run_hydraulics_cache", None)
     for k in [k for k in st.session_state.keys()
-              if k.startswith("_sync_marker_")]:
+              if (k.startswith("_sync_marker_")
+                  or k.startswith("_sync_of_"))]:
         st.session_state.pop(k, None)
+    # NOTE: ``only_feasible`` is a user-level UI preference, not
+    # experiment state — it is intentionally left intact so the filter
+    # survives Clear Results / new experiments.
 
 def _best_cost_among_feasible(experiment) -> float:
     """Lowest cost among feasible, successful/partial runs (+inf if none)."""
@@ -1638,18 +1664,19 @@ def _get_run_hydraulics(algo: str, run_index: int):
     return Pj, Vp, ok
 
 def _render_run_selector(widget_key: str):
-    """Render the run-selector dropdown and keep it synced across tabs.
+    """Render the run-selector dropdown, feasibility filter and reset
+    button, keeping both tabs in sync.
 
-    ``selected_run`` (a plain session_state key, NOT a widget key) is the
-    single source of truth.  ``widget_key`` names this tab's dropdown
-    (distinct per tab to avoid DuplicateWidgetID).  ``_sync_marker_{key}``
-    records the value we last pushed into the widget, so that a change
-    made in the *other* tab's dropdown is detected and pushed here on
-    the next render, without overriding the user's just-made choice in
-    *this* dropdown.
+    ``selected_run`` and ``only_feasible`` are plain session_state keys
+    (single source of truth).  Per-tab widget keys
+    (``widget_key`` for the dropdown, ``only_feasible_<widget_key>`` for
+    the checkbox) are kept in step with those canonical values through
+    per-widget sync-markers.  This lets two tabs each own their dropdown
+    without DuplicateWidgetID clashes, while the user sees the same
+    selection everywhere.
 
     Returns ``(algo, run_index, run_record, best_cost)`` or
-    ``(None, None, None, None)`` if there is nothing to inspect.
+    ``(None, None, None, None)`` when there is nothing to inspect.
     """
     experiment = st.session_state.experiment
     if experiment is None:
@@ -1665,43 +1692,112 @@ def _render_run_selector(widget_key: str):
         return None, None, None, None
 
     best_cost = _best_cost_among_feasible(experiment)
-    valid_keys = {(a, r.run_index) for a, r in all_runs}
 
-    # Default selection if missing or invalid (e.g. first visit after a
-    # new experiment, or after loading a snapshot).
-    if st.session_state.get("selected_run") not in valid_keys:
-        preferred = (st.session_state.get("best_algo"),
-                     st.session_state.get("best_run_index"))
-        st.session_state.selected_run = (
-            preferred if preferred in valid_keys
-            else (all_runs[0][0], all_runs[0][1].run_index)
+    # ---- "Only feasible" state (canonical + per-tab widget) ----
+    of_widget_key = f"only_feasible_{widget_key}"
+    of_marker = f"_sync_of_{widget_key}"
+    if "only_feasible" not in st.session_state:
+        st.session_state["only_feasible"] = False
+
+    def _on_of_change():
+        st.session_state["only_feasible"] = bool(
+            st.session_state.get(of_widget_key, False)
         )
 
-    # Push selected_run into this widget only when selected_run changed
-    # since the last time we synced it here — this is what makes two
-    # dropdowns in different tabs stay in step without clobbering the
-    # one the user just used.
-    marker = f"_sync_marker_{widget_key}"
-    if st.session_state.get(marker) != st.session_state.selected_run:
-        st.session_state[widget_key] = st.session_state.selected_run
-        st.session_state[marker] = st.session_state.selected_run
+    n_feasible = sum(1 for _, r in all_runs if r.feasible)
+    if n_feasible == 0:
+        # No feasible runs — force the filter off and hide the checkbox.
+        if st.session_state["only_feasible"]:
+            st.session_state["only_feasible"] = False
+            st.session_state[of_marker] = False
+        st.caption(
+            "No feasible runs in this experiment — showing all runs."
+        )
+    elif n_feasible < len(all_runs):
+        # Push the canonical value into this tab's widget when the
+        # *other* tab (or a snapshot load) changed it.
+        if st.session_state.get(of_marker) != st.session_state["only_feasible"]:
+            st.session_state[of_widget_key] = st.session_state["only_feasible"]
+            st.session_state[of_marker] = st.session_state["only_feasible"]
+        st.checkbox(
+            "Only feasible", key=of_widget_key, on_change=_on_of_change,
+        )
 
-    def _on_change():
+    # ---- Filter and validate the selection ----
+    only_feasible = st.session_state["only_feasible"]
+    shown = (
+        [(a, r) for a, r in all_runs if r.feasible]
+        if only_feasible else all_runs
+    )
+    if not shown:                    # defensive fallback, should not fire
+        shown = all_runs
+    valid_keys = {(a, r.run_index) for a, r in shown}
+
+    best_key = (
+        st.session_state.get("best_algo"),
+        st.session_state.get("best_run_index"),
+    )
+    reset_note = None
+    if st.session_state.get("selected_run") not in valid_keys:
+        preferred = (
+            best_key if best_key in valid_keys
+            else (shown[0][0], shown[0][1].run_index)
+        )
+        prev = st.session_state.get("selected_run")
+        st.session_state.selected_run = preferred
+        if prev is not None and only_feasible:
+            reset_note = (
+                "Selection reset to the best feasible run "
+                "(the previous selection is infeasible)."
+            )
+
+    # ---- Sync the dropdown widget with the canonical selection ----
+    sel_marker = f"_sync_marker_{widget_key}"
+    if st.session_state.get(sel_marker) != st.session_state.selected_run:
+        st.session_state[widget_key] = st.session_state.selected_run
+        st.session_state[sel_marker] = st.session_state.selected_run
+
+    def _on_sel_change():
         st.session_state.selected_run = st.session_state[widget_key]
 
-    st.selectbox(
-        "Run",
-        options=[(a, r.run_index) for a, r in all_runs],
-        format_func=lambda k: _format_run_option(
-            k[0], experiment.runs[k[0]][k[1] - 1],
-            is_best=_is_best_cost(
-                experiment.runs[k[0]][k[1] - 1].score, best_cost),
-        ),
-        key=widget_key,
-        on_change=_on_change,
-        label_visibility="collapsed",
+    # ---- Dropdown + Reset button in one row ----
+    c_sel, c_btn = st.columns([6, 1])
+    with c_sel:
+        st.selectbox(
+            "Run",
+            options=[(a, r.run_index) for a, r in shown],
+            format_func=lambda k: _format_run_option(
+                k[0], experiment.runs[k[0]][k[1] - 1],
+                is_best=_is_best_cost(
+                    experiment.runs[k[0]][k[1] - 1].score, best_cost),
+            ),
+            key=widget_key,
+            on_change=_on_sel_change,
+            label_visibility="collapsed",
+        )
+    with c_btn:
+        at_best = (
+            st.session_state.get("selected_run") == best_key
+            and best_key in valid_keys
+        )
+        st.button(
+            "↩ Reset",
+            key=f"reset_best_{widget_key}",
+            disabled=(at_best or best_key not in valid_keys),
+            help=(
+                "Jump back to the canonical best run of the experiment. "
+                "When several runs tie on cost, this returns to the one "
+                "picked by the summary — all tied-best runs remain "
+                "⭐-marked in the dropdown."
+            ),
+            on_click=lambda: st.session_state.__setitem__(
+                "selected_run", best_key),
+        )
+
+    st.caption(
+        "⭐ marks runs that match the global best cost."
+        + (f"  {reset_note}" if reset_note else "")
     )
-    st.caption("⭐ marks runs that match the global best cost.")
 
     algo, run_index = st.session_state.selected_run
     return algo, run_index, experiment.runs[algo][run_index - 1], best_cost
