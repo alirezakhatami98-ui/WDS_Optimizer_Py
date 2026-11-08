@@ -2546,16 +2546,22 @@ def _render_map_tab():
         }
         fixed_1based = [int(x) + 1 for x in snap["FixedPipes"]]
 
-    # Before calling build_network_figure
+    # Pass all four constraints to the map (None = disabled, so the
+    # figure omits its colouring influence and its hover label).
     c = _constraints_from_snapshot(snap) if snap is not None else None
     pmin_for_map = (pressure_from_si(c["Pmin"]["value"], units)
                     if c and c["Pmin"]["enabled"] else None)
+    pmax_for_map = (pressure_from_si(c["Pmax"]["value"], units)
+                    if c and c["Pmax"]["enabled"] else None)
+    vmin_for_map = (velocity_from_si(c["Vmin"]["value"], units)
+                    if c and c["Vmin"]["enabled"] else None)
     vmax_for_map = (velocity_from_si(c["Vmax"]["value"], units)
                     if c and c["Vmax"]["enabled"] else None)
     fig = build_network_figure(
         wn, mode=mode,
         pressures=pressures, velocities=velocities, diameters=diameters,
-        pmin=pmin_for_map, vmax=vmax_for_map,
+        pmin=pmin_for_map, pmax=pmax_for_map,
+        vmin=vmin_for_map, vmax=vmax_for_map,
         fixed_pipe_indices=fixed_1based,
         show_labels=show_labels,
         units=units,
