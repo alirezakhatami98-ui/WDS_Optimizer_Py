@@ -587,8 +587,10 @@ Contents
   Experiment seed   : {experiment.experiment_seed}
   NS                : {experiment.NS}
   MaxGen            : {experiment.MaxGen}
-  Pmin              : {experiment.Pmin} m
-  Vmax              : {experiment.Vmax} m/s
+  Pmin              : {experiment.Pmin} m    [{'on' if experiment.use_pmin else 'off'}]
+  Pmax              : {experiment.Pmax} m    [{'on' if experiment.use_pmax else 'off'}]
+  Vmin              : {experiment.Vmin} m/s  [{'on' if experiment.use_vmin else 'off'}]
+  Vmax              : {experiment.Vmax} m/s  [{'on' if experiment.use_vmax else 'off'}]
 
 Best result
 -----------

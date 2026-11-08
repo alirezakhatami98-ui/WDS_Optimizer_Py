@@ -206,6 +206,15 @@ def restore_experiment(data: dict) -> ExperimentResult:
         fixed_pipes=np.array(data["problem"]["FixedPipes"]),
         cancelled=bool(exp.get("cancelled", False)),   # old files: False
         restart=dict(exp.get("restart", {})),          # old files: {}
+        # Extended constraints.  Backward compat: old snapshots lack
+        # these keys in data["problem"] and use the pre-Pmax/Vmin
+        # defaults (Pmin on, Vmax on, others off).
+        Pmax=float(data["problem"].get("Pmax", 100.0)),
+        Vmin=float(data["problem"].get("Vmin", 0.0)),
+        use_pmin=bool(data["problem"].get("use_pmin", True)),
+        use_pmax=bool(data["problem"].get("use_pmax", False)),
+        use_vmin=bool(data["problem"].get("use_vmin", False)),
+        use_vmax=bool(data["problem"].get("use_vmax", True)),
     )
     for algo, runs in exp["runs"].items():
         result.runs[algo] = [_dict_to_run(r) for r in runs]

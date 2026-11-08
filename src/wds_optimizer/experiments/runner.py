@@ -51,6 +51,18 @@ class ExperimentResult:
     runs: dict = field(default_factory=dict)   # {algo: [RunRecord, ...]}
     cancelled: bool = False                    # True if stopped by the user
     restart: dict = field(default_factory=dict)  # restart settings used
+    # Extended constraint set (added alongside Pmax/Vmin support).  The
+    # pre-Pmax/Vmin behaviour is preserved by the defaults: Pmin and
+    # Vmax on, Pmax and Vmin off.  These fields exist so experiment
+    # snapshots and README reports record *which* constraints were
+    # enforced, not just their values (a value can be present and yet
+    # disabled).
+    Pmax: float = 100.0
+    Vmin: float = 0.0
+    use_pmin: bool = True
+    use_pmax: bool = False
+    use_vmin: bool = False
+    use_vmax: bool = True
 
 
 def run_experiment(
@@ -113,6 +125,12 @@ def run_experiment(
         variable_pipes=np.asarray(problem["VariablePipes"]),
         fixed_pipes=np.asarray(problem["FixedPipes"]),
         restart=_restart_dict(base_config),
+        Pmax=float(_constraints["Pmax"]["value"]),
+        Vmin=float(_constraints["Vmin"]["value"]),
+        use_pmin=bool(_constraints["Pmin"]["enabled"]),
+        use_pmax=bool(_constraints["Pmax"]["enabled"]),
+        use_vmin=bool(_constraints["Vmin"]["enabled"]),
+        use_vmax=bool(_constraints["Vmax"]["enabled"]),
     )
 
     for algo in selected:
