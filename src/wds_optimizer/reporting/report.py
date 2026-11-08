@@ -70,10 +70,29 @@ def build_report_zip(
 
     _try("convergence.png", make_convergence_png, experiment)
     _try("cost_distribution.png", make_cost_distribution_png, experiment)
+    # Constraint values (SI) + enabled flags; pass None for disabled
+    # constraints so figures omit the line and violation colouring.
+    c = {
+        "Pmin": {"enabled": bool(problem_snapshot.get("use_pmin", True)),
+                 "value": pmin},
+        "Pmax": {"enabled": bool(problem_snapshot.get("use_pmax", False)),
+                 "value": float(problem_snapshot.get("Pmax", 100.0))},
+        "Vmin": {"enabled": bool(problem_snapshot.get("use_vmin", False)),
+                 "value": float(problem_snapshot.get("Vmin", 0.0))},
+        "Vmax": {"enabled": bool(problem_snapshot.get("use_vmax", True)),
+                 "value": vmax},
+    }
+    pmin_fig = c["Pmin"]["value"] if c["Pmin"]["enabled"] else None
+    pmax_fig = c["Pmax"]["value"] if c["Pmax"]["enabled"] else None
+    vmin_fig = c["Vmin"]["value"] if c["Vmin"]["enabled"] else None
+    vmax_fig = c["Vmax"]["value"] if c["Vmax"]["enabled"] else None
+
     _try("node_pressures.png", make_pressure_png,
-         junction_names, node_pressures, pmin, units)
+         junction_names, node_pressures, pmin_fig, units,
+         pmax_si=pmax_fig)
     _try("pipe_velocities.png", make_velocity_png,
-         pipe_names, pipe_velocities, vmax, units)
+         pipe_names, pipe_velocities, vmax_fig, units,
+         vmin_si=vmin_fig)
     if wn is not None:
         for mode in ("velocity", "diameter", "pressure"):
             _try(f"network_map_{mode}.png", make_network_map_png,
@@ -423,10 +442,23 @@ def _build_markdown(*, experiment, summary, best_algo, best_run_index,
     L.append(f"- **Restart on stagnation:** {_restart_text(experiment)}")
     for line in _algorithm_param_lines(experiment, config):
         L.append(line)
-    L.append(f"- **Pmin:** {pmin_disp:.2f} {p_unit} "
-             f"({pmin:.3f} m)")
-    L.append(f"- **Vmax:** {vmax_disp:.2f} {v_unit} "
-             f"({vmax:.3f} m/s)")
+    pmin_disp = pressure_from_si(
+        problem_snapshot["Pmin"], units)
+    pmax_disp = pressure_from_si(
+        problem_snapshot.get("Pmax", 100.0), units)
+    vmin_disp = velocity_from_si(
+        problem_snapshot.get("Vmin", 0.0), units)
+    vmax_disp = velocity_from_si(
+        problem_snapshot["Vmax"], units)
+    for key, label, disp, unit in [
+        ("use_pmin", "Pmin", pmin_disp, p_unit),
+        ("use_pmax", "Pmax", pmax_disp, p_unit),
+        ("use_vmin", "Vmin", vmin_disp, v_unit),
+        ("use_vmax", "Vmax", vmax_disp, v_unit),
+    ]:
+        on = bool(problem_snapshot.get(key, key in ("use_pmin", "use_vmax")))
+        state = "on" if on else "off"
+        L.append(f"- **{label}:** {disp:.2f} {unit} ({state})")
     L.append(f"- **Diameter options:** {len(D)} "
              f"({D[0]*1000:.1f} – {D[-1]*1000:.1f} mm)\n")
 
@@ -483,10 +515,19 @@ def _build_markdown(*, experiment, summary, best_algo, best_run_index,
     L.append(f"### Node pressures\n")
     L.append(f"| Node | Name | Pressure ({p_unit}) | Status |")
     L.append("|---|---|---|---|")
+    use_pmin = bool(problem_snapshot.get("use_pmin", True))
+    use_pmax = bool(problem_snapshot.get("use_pmax", False))
+    pmin_si_val = problem_snapshot["Pmin"]
+    pmax_si_val = problem_snapshot.get("Pmax", 100.0)
     for i, nname in enumerate(problem_snapshot["junction_names"]):
         p_si = node_pressures[i]
         p_disp = pressure_from_si(p_si, units)
-        status = "Violation" if p_si < pmin else "OK"
+        if use_pmin and p_si < pmin_si_val:
+            status = "Violation (< Pmin)"
+        elif use_pmax and p_si > pmax_si_val:
+            status = "Violation (> Pmax)"
+        else:
+            status = "OK"
         L.append(f"| {i+1} | {nname} | {p_disp:.3f} | {status} |")
     L.append("")
 

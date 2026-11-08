@@ -5,18 +5,14 @@ import numpy as np
 
 def build_optimization_problem(
     *, wn, Din, Cost, D_m, full_lengths, initial_D,
-    fixed_pipes, variable_pipes, Pmin, Vmax,
+    fixed_pipes, variable_pipes, constraints,
     pipe_names, junction_names, units,
 ):
-    """Return the Problem dict consumed by GA/PSO.
+    """Return the Problem dict consumed by GA/PSO/SADE.
 
-    Notes
-    -----
-    * ``VariablePipes`` is a 0-based array of indices into
-      ``pipe_names`` / ``full_lengths`` / ``initial_D``.
-    * ``InitialD`` is the initial diameter of *all* pipes, in meters.
-    * WNTR internally uses meters everywhere, so ``D_m`` must be in
-      meters; the original values are kept as ``Din`` for display.
+    ``constraints`` is ``{"Pmin"|"Pmax"|"Vmin"|"Vmax": {"enabled": bool,
+    "value": float}}`` with pressure values in metres and velocity
+    values in m/s.
     """
     return {
         "wn": wn,
@@ -30,8 +26,7 @@ def build_optimization_problem(
         "InitialD": np.asarray(initial_D, dtype=float),
         "FixedPipes": np.asarray(fixed_pipes, dtype=int),
         "VariablePipes": np.asarray(variable_pipes, dtype=int),
-        "Pmin": float(Pmin),
-        "Vmax": float(Vmax),
-        "JunctionIndices": np.asarray(junction_names),  # names, not indices
+        "Constraints": constraints,
+        "JunctionIndices": np.asarray(junction_names),
         "Units": units,
     }

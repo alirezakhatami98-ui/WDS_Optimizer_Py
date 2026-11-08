@@ -22,8 +22,7 @@ def evaluate_population(Pop, problem, cache):
     var_pipes = problem["VariablePipes"]
     unit_costs = problem["Cost"]
     lengths = problem["L"]
-    Pmin = problem["Pmin"]
-    Vmax = problem["Vmax"]
+    constraints = problem["Constraints"]
     pipe_names = problem["pipe_names"]
     junction_names = problem["junction_names"]
     wn = problem["wn"]
@@ -48,7 +47,7 @@ def evaluate_population(Pop, problem, cache):
         c = calculate_cost_from_indices(
             Pop[:, i], var_pipes, unit_costs, lengths
         )
-        v, f = check_constraints(Pj, Vp, Pmin, Vmax, ok)
+        v, f = check_constraints(Pj, Vp, constraints, ok)
 
         cost[i], viol[i], feas[i] = c, v, f
         cache[key] = (c, v, f)

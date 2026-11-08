@@ -143,10 +143,22 @@ def fake_session_state(monkeypatch):
 
     Both st.session_state.d_path (attribute) and st.session_state.get(...)
     (dict) must work — _prepare_problem uses both styles.
+
+    Seeds the four constraint values and their enabled flags with the
+    app defaults (Pmin=30 m on, Pmax=100 m off, Vmin=0 m/s off,
+    Vmax=2.5 m/s on).  _prepare_problem reads ``st.session_state.pmin``,
+    ``.pmax``, ``.vmin``, ``.vmax`` and ``.use_pmin`` / ``.use_pmax`` /
+    ``.use_vmin`` / ``.use_vmax``; adding new constraints later requires
+    updating this fixture too.
     """
     fake = FakeSessionState(
         inp_path=None, d_path=None, cost_path=None,
-        diam_unit="mm", pmin=30.0, vmax=2.5, fixed_pipes="",
+        diam_unit="mm",
+        # values (display units, matching the unit system in the test .inp)
+        pmin=30.0, pmax=100.0, vmin=0.0, vmax=2.5,
+        # enabled flags (defaults: Pmin on, Vmax on, Pmax & Vmin off)
+        use_pmin=True, use_pmax=False, use_vmin=False, use_vmax=True,
+        fixed_pipes="",
     )
     monkeypatch.setattr(st, "session_state", fake)
     return fake

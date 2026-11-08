@@ -97,9 +97,18 @@ def build_snapshot(
             "diam_unit": problem_snapshot.get("Units", {}).get(
                 "DiameterUnit", "mm"
             ),
-            "pmin_si": problem_snapshot["Pmin"],      # SI, always
-            "vmax_si": problem_snapshot["Vmax"],      # SI, always
-            "pmin": problem_snapshot["Pmin"],         # backward compat
+            # SI values (canonical)
+            "pmin_si": problem_snapshot["Pmin"],
+            "pmax_si": problem_snapshot.get("Pmax", 100.0),
+            "vmin_si": problem_snapshot.get("Vmin", 0.0),
+            "vmax_si": problem_snapshot["Vmax"],
+            # Enabled flags
+            "use_pmin": bool(problem_snapshot.get("use_pmin", True)),
+            "use_pmax": bool(problem_snapshot.get("use_pmax", False)),
+            "use_vmin": bool(problem_snapshot.get("use_vmin", False)),
+            "use_vmax": bool(problem_snapshot.get("use_vmax", True)),
+            # Backward-compat aliases (older loaders read these keys)
+            "pmin": problem_snapshot["Pmin"],
             "vmax": problem_snapshot["Vmax"],
         },
         "config": {k: config.get(k) for k in (
@@ -122,7 +131,13 @@ def build_snapshot(
             "VariablePipes":  _to_list(problem_snapshot["VariablePipes"]),
             "FixedPipes":     _to_list(problem_snapshot["FixedPipes"]),
             "Pmin":           problem_snapshot["Pmin"],
+            "Pmax":           problem_snapshot.get("Pmax", 100.0),
+            "Vmin":           problem_snapshot.get("Vmin", 0.0),
             "Vmax":           problem_snapshot["Vmax"],
+            "use_pmin":       bool(problem_snapshot.get("use_pmin", True)),
+            "use_pmax":       bool(problem_snapshot.get("use_pmax", False)),
+            "use_vmin":       bool(problem_snapshot.get("use_vmin", False)),
+            "use_vmax":       bool(problem_snapshot.get("use_vmax", True)),
             "Units":          dict(problem_snapshot["Units"]),
         },
         "experiment": {

@@ -93,6 +93,12 @@ def run_experiment(
         run_seeds = np.unique(np.concatenate([run_seeds, extra]))
     run_seeds = run_seeds[:number_of_runs]
 
+    # Constraints live in problem["Constraints"] since the Pmax/Vmin
+    # commit.  ExperimentResult.Pmin and .Vmax are legacy informational
+    # fields (they appear in README.txt and are read by
+    # snapshot.restore_experiment); keep them populated from the
+    # constraint values so existing reports keep working.
+    _constraints = problem["Constraints"]
     result = ExperimentResult(
         experiment_id=datetime.now().strftime("%Y%m%d_%H%M%S"),
         timestamp=datetime.now(),
@@ -101,8 +107,8 @@ def run_experiment(
         experiment_seed=experiment_seed,
         NS=base_config.NS,
         MaxGen=base_config.MaxGen,
-        Pmin=problem["Pmin"],
-        Vmax=problem["Vmax"],
+        Pmin=float(_constraints["Pmin"]["value"]),
+        Vmax=float(_constraints["Vmax"]["value"]),
         NP=problem["NP"],
         variable_pipes=np.asarray(problem["VariablePipes"]),
         fixed_pipes=np.asarray(problem["FixedPipes"]),

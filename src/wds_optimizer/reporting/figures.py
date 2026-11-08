@@ -108,52 +108,81 @@ def make_cost_distribution_png(result, colors=None) -> bytes:
 #  Pressures / velocities bar charts
 # =====================================================================
 
-def make_pressure_png(junction_names, pressures_si, pmin_si, units=None) -> bytes:
-    """Pressure bar chart. ``pressures_si``/``pmin_si`` are in meters."""
+def make_pressure_png(junction_names, pressures_si, pmin_si=None,
+                      units=None, pmax_si=None) -> bytes:
+    """Pressure bar chart with optional Pmin / Pmax reference lines.
+
+    ``pmin_si`` / ``pmax_si`` are in metres; pass ``None`` to omit that
+    constraint line and exclude it from violation colouring.
+    """
     from ..hydraulics.units import pressure_from_si
 
     units = units or {"PressureUnit": "m"}
     p_unit = units.get("PressureUnit", "m")
     pressures = np.array([pressure_from_si(p, units) for p in pressures_si])
-    pmin = pressure_from_si(pmin_si, units)
+    pmin = pressure_from_si(pmin_si, units) if pmin_si is not None else None
+    pmax = pressure_from_si(pmax_si, units) if pmax_si is not None else None
+
+    def _viol(p):
+        return ((pmin is not None and p < pmin)
+                or (pmax is not None and p > pmax))
 
     fig = Figure(figsize=(9, 4))
     ax = fig.add_subplot(111)
-    colors = ["#e74c3c" if p < pmin else "#2ecc71" for p in pressures]
+    colors = ["#e74c3c" if _viol(p) else "#2ecc71" for p in pressures]
     x = np.arange(len(pressures))
     ax.bar(x, pressures, color=colors)
-    ax.axhline(pmin, color="red", linestyle="--",
-               label=f"Pmin = {pmin:.2f} {p_unit}")
+    if pmin is not None:
+        ax.axhline(pmin, color="red", linestyle="--",
+                   label=f"Pmin = {pmin:.2f} {p_unit}")
+    if pmax is not None:
+        ax.axhline(pmax, color="red", linestyle="--",
+                   label=f"Pmax = {pmax:.2f} {p_unit}")
     ax.set_xticks(x)
     ax.set_xticklabels(junction_names, rotation=45)
     ax.set_ylabel(f"Pressure ({p_unit})")
     ax.set_title("Node pressures (best design)")
-    ax.legend()
+    if pmin is not None or pmax is not None:
+        ax.legend()
     _sanitize_ax(ax)
     return _to_png(fig)
 
 
-def make_velocity_png(pipe_names, velocities_si, vmax_si, units=None) -> bytes:
-    """Velocity bar chart. ``velocities_si``/``vmax_si`` are in m/s."""
+def make_velocity_png(pipe_names, velocities_si, vmax_si=None,
+                      units=None, vmin_si=None) -> bytes:
+    """Velocity bar chart with optional Vmin / Vmax reference lines.
+
+    ``vmin_si`` / ``vmax_si`` are in m/s; pass ``None`` to omit.
+    """
     from ..hydraulics.units import velocity_from_si
 
     units = units or {"VelocityUnit": "m/s"}
     v_unit = units.get("VelocityUnit", "m/s")
     velocities = np.array([velocity_from_si(v, units) for v in velocities_si])
-    vmax = velocity_from_si(vmax_si, units)
+    vmin = velocity_from_si(vmin_si, units) if vmin_si is not None else None
+    vmax = velocity_from_si(vmax_si, units) if vmax_si is not None else None
+
+    def _viol(v):
+        return ((vmin is not None and v < vmin)
+                or (vmax is not None and v > vmax))
 
     fig = Figure(figsize=(9, 4))
     ax = fig.add_subplot(111)
-    colors = ["#e74c3c" if v > vmax else "#3498db" for v in velocities]
+    colors = ["#e74c3c" if _viol(v) else "#3498db" for v in velocities]
     x = np.arange(len(velocities))
     ax.bar(x, velocities, color=colors)
-    ax.axhline(vmax, color="red", linestyle="--",
-               label=f"Vmax = {vmax:.2f} {v_unit}")
+    if vmin is not None:
+        ax.axhline(vmin, color="red", linestyle="--",
+                   label=f"Vmin = {vmin:.2f} {v_unit}")
+    if vmax is not None:
+        ax.axhline(vmax, color="red", linestyle="--",
+                   label=f"Vmax = {vmax:.2f} {v_unit}")
     ax.set_xticks(x)
     ax.set_xticklabels(pipe_names, rotation=45)
     ax.set_ylabel(f"Velocity ({v_unit})")
     ax.set_title("Pipe velocities (best design)")
-    ax.legend()
+    if vmin is not None or vmax is not None:
+        ax.legend()
     _sanitize_ax(ax)
     return _to_png(fig)
 

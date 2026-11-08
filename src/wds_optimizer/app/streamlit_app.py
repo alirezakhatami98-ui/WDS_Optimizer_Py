@@ -213,7 +213,13 @@ def _init_widget_state():
         "ns_input":          int(st.session_state.get("ns", 50)),
         "max_gen_input":     int(st.session_state.get("max_gen", 500)),
         "pmin_input":        float(st.session_state.get("pmin", 30.0)),
+        "pmax_input":        float(st.session_state.get("pmax", 100.0)),
+        "vmin_input":        float(st.session_state.get("vmin", 0.0)),
         "vmax_input":        float(st.session_state.get("vmax", 2.5)),
+        "use_pmin_input":    bool(st.session_state.get("use_pmin", True)),
+        "use_pmax_input":    bool(st.session_state.get("use_pmax", False)),
+        "use_vmin_input":    bool(st.session_state.get("use_vmin", False)),
+        "use_vmax_input":    bool(st.session_state.get("use_vmax", True)),
         "fixed_pipes_input": st.session_state.get("fixed_pipes", ""),
         "ga_pc_input":       float(st.session_state.get("ga_pc", 0.8)),
         "ga_pm_input":       float(st.session_state.get("ga_pm", 0.03)),
@@ -290,19 +296,25 @@ def _render_sidebar():
                 units = None
         st.session_state.network_units = units
 
-        # Auto-convert Pmin/Vmax when the unit system changes.
-        # Both canonical keys and widget keys are updated; widgets below
-        # are rendered with `key=` only (no `value=`), so this is safe.
+        # Auto-convert all four constraint values when units change.
         prev = st.session_state.get("network_units_prev")
         if units is not None and prev is not None:
             if prev.get("System") != units.get("System"):
                 st.session_state.pmin = pressure_from_si(
                     pressure_to_si(st.session_state.pmin, prev), units
                 )
+                st.session_state.pmax = pressure_from_si(
+                    pressure_to_si(st.session_state.pmax, prev), units
+                )
+                st.session_state.vmin = velocity_from_si(
+                    velocity_to_si(st.session_state.vmin, prev), units
+                )
                 st.session_state.vmax = velocity_from_si(
                     velocity_to_si(st.session_state.vmax, prev), units
                 )
                 st.session_state.pmin_input = float(st.session_state.pmin)
+                st.session_state.pmax_input = float(st.session_state.pmax)
+                st.session_state.vmin_input = float(st.session_state.vmin)
                 st.session_state.vmax_input = float(st.session_state.vmax)
                 st.info(
                     f"Pressure and velocity values converted to "
@@ -311,19 +323,12 @@ def _render_sidebar():
                 )
         st.session_state.network_units_prev = units
 
-        p_label = (
-            f"Min pressure ({units['PressureUnit']})" if units
-            else "Min pressure (m)"
-        )
-        v_label = (
-            f"Max velocity ({units['VelocityUnit']})" if units
-            else "Max velocity (m/s)"
-        )
+        p_unit_ui = units["PressureUnit"] if units else "m"
+        v_unit_ui = units["VelocityUnit"] if units else "m/s"
         if units and units["System"] == "US":
             st.caption(
                 f"Network uses US customary units: "
-                f"pressure in {units['PressureUnit']}, "
-                f"velocity in {units['VelocityUnit']}."
+                f"pressure in {p_unit_ui}, velocity in {v_unit_ui}."
             )
 
         st.number_input(
@@ -336,14 +341,68 @@ def _render_sidebar():
             min_value=5, max_value=5000, step=1,
             key="max_gen_input",
         )
-        st.number_input(
-            p_label, min_value=0.0, step=1.0,
-            key="pmin_input",
+
+        # ---- Constraint selector ----
+        st.subheader("Constraints")
+        st.caption(
+            "Enable the constraints that apply to this network. "
+            "Disabled constraints are ignored by the optimiser and "
+            "by the hydraulic plots — no need to set Vmax to a huge "
+            "value to switch it off."
         )
-        st.number_input(
-            v_label, min_value=0.1, step=0.1,
-            key="vmax_input",
-        )
+
+        def _constraint_row(name, unit, use_key, val_key, min_v, step,
+                            help_text):
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                enabled = st.checkbox(name, key=use_key,
+                                      help=help_text)
+            with c2:
+                st.number_input(
+                    f"{name} ({unit})",
+                    min_value=float(min_v), step=float(step),
+                    key=val_key,
+                    disabled=not enabled,
+                    label_visibility="collapsed",
+                )
+            return enabled
+
+        st.markdown("**Pressure**")
+        _constraint_row("Pmin", p_unit_ui, "use_pmin_input",
+                        "pmin_input", 0.0, 1.0,
+                        f"Minimum pressure at every junction ({p_unit_ui}).")
+        _constraint_row("Pmax", p_unit_ui, "use_pmax_input",
+                        "pmax_input", 0.0, 1.0,
+                        f"Maximum pressure at every junction ({p_unit_ui}).")
+
+        st.markdown("**Velocity**")
+        _constraint_row("Vmin", v_unit_ui, "use_vmin_input",
+                        "vmin_input", 0.0, 0.1,
+                        f"Minimum velocity in every pipe ({v_unit_ui}).")
+        _constraint_row("Vmax", v_unit_ui, "use_vmax_input",
+                        "vmax_input", 0.1, 0.1,
+                        f"Maximum velocity in every pipe ({v_unit_ui}).")
+
+        # ---- Inline validation ----
+        _any_on = any(st.session_state.get(f"use_{k}_input")
+                      for k in ("pmin", "pmax", "vmin", "vmax"))
+        if not _any_on:
+            st.error("Enable at least one constraint before running.")
+        _p_both = (st.session_state.get("use_pmin_input")
+                   and st.session_state.get("use_pmax_input"))
+        if _p_both and st.session_state.pmin_input >= st.session_state.pmax_input:
+            st.error(
+                f"Pmin ({st.session_state.pmin_input}) must be strictly "
+                f"smaller than Pmax ({st.session_state.pmax_input})."
+            )
+        _v_both = (st.session_state.get("use_vmin_input")
+                   and st.session_state.get("use_vmax_input"))
+        if _v_both and st.session_state.vmin_input >= st.session_state.vmax_input:
+            st.error(
+                f"Vmin ({st.session_state.vmin_input}) must be strictly "
+                f"smaller than Vmax ({st.session_state.vmax_input})."
+            )
+
         st.text_input(
             "Fixed pipe IDs (e.g. '1, 3')",
             key="fixed_pipes_input",
@@ -753,17 +812,39 @@ def _prepare_problem():
         i for i in range(len(pipe_names)) if i not in fixed_0based
     ]
 
-    # Convert Pmin/Vmax from user-facing (network) units to SI for WNTR
-    Pmin_si = pressure_to_si(st.session_state.pmin, units)
-    Vmax_si = velocity_to_si(st.session_state.vmax, units)
+    # Build the constraint dict; convert display units -> SI.
+    constraints = {
+        "Pmin": {"enabled": bool(st.session_state.use_pmin),
+                 "value": pressure_to_si(st.session_state.pmin, units)},
+        "Pmax": {"enabled": bool(st.session_state.use_pmax),
+                 "value": pressure_to_si(st.session_state.pmax, units)},
+        "Vmin": {"enabled": bool(st.session_state.use_vmin),
+                 "value": velocity_to_si(st.session_state.vmin, units)},
+        "Vmax": {"enabled": bool(st.session_state.use_vmax),
+                 "value": velocity_to_si(st.session_state.vmax, units)},
+    }
+
+    if not any(c["enabled"] for c in constraints.values()):
+        raise ValueError("Enable at least one constraint before running.")
+    if (constraints["Pmin"]["enabled"] and constraints["Pmax"]["enabled"]
+            and constraints["Pmin"]["value"] >= constraints["Pmax"]["value"]):
+        raise ValueError(
+            f"Pmin ({st.session_state.pmin}) must be smaller than "
+            f"Pmax ({st.session_state.pmax})."
+        )
+    if (constraints["Vmin"]["enabled"] and constraints["Vmax"]["enabled"]
+            and constraints["Vmin"]["value"] >= constraints["Vmax"]["value"]):
+        raise ValueError(
+            f"Vmin ({st.session_state.vmin}) must be smaller than "
+            f"Vmax ({st.session_state.vmax})."
+        )
 
     problem = build_optimization_problem(
         wn=wn, Din=Din, Cost=Cost, D_m=D_m,
         full_lengths=lengths, initial_D=initial_D,
         fixed_pipes=fixed_0based,
         variable_pipes=variable_0based,
-        Pmin=Pmin_si,
-        Vmax=Vmax_si,
+        constraints=constraints,
         pipe_names=pipe_names,
         junction_names=junction_names,
         units=units,
@@ -783,7 +864,12 @@ def _sync_sidebar_state(with_n_runs: bool = True):
     """
     pairs = [
         ("ns", "ns_input"), ("max_gen", "max_gen_input"),
-        ("pmin", "pmin_input"), ("vmax", "vmax_input"),
+        ("pmin", "pmin_input"), ("pmax", "pmax_input"),
+        ("vmin", "vmin_input"), ("vmax", "vmax_input"),
+        ("use_pmin", "use_pmin_input"),
+        ("use_pmax", "use_pmax_input"),
+        ("use_vmin", "use_vmin_input"),
+        ("use_vmax", "use_vmax_input"),
         ("fixed_pipes", "fixed_pipes_input"), ("exp_seed", "exp_seed_input"),
         ("ga_pc", "ga_pc_input"), ("ga_pm", "ga_pm_input"),
         ("ga_sel", "ga_sel_input"),
@@ -1100,6 +1186,7 @@ def _finalize_run(job: BackgroundJob):
     st.session_state.pipe_velocities = Vp
     st.session_state.hydraulics_converged = conv_ok
 
+    c = problem["Constraints"]
     st.session_state.problem_snapshot = {
         "pipe_names": list(problem["pipe_names"]),
         "junction_names": list(problem["junction_names"]),
@@ -1110,8 +1197,15 @@ def _finalize_run(job: BackgroundJob):
         "L": problem["L"].copy(),
         "VariablePipes": problem["VariablePipes"].copy(),
         "FixedPipes": problem["FixedPipes"].copy(),
-        "Pmin": problem["Pmin"],
-        "Vmax": problem["Vmax"],
+        # Constraint values (SI) + enabled flags
+        "Pmin": c["Pmin"]["value"],
+        "Pmax": c["Pmax"]["value"],
+        "Vmin": c["Vmin"]["value"],
+        "Vmax": c["Vmax"]["value"],
+        "use_pmin": c["Pmin"]["enabled"],
+        "use_pmax": c["Pmax"]["enabled"],
+        "use_vmin": c["Vmin"]["enabled"],
+        "use_vmax": c["Vmax"]["enabled"],
         "Units": dict(units),
     }
 
@@ -1232,12 +1326,29 @@ def _restore_from_snapshot(data: dict):
             st.session_state[key] = cfg[key]
 
     units = prob["Units"]
+    # Value + enabled flags, with backward-compat defaults for snapshots
+    # written before Pmax/Vmin existed (Pmin and Vmax were always on).
     pmin_si = env.get("pmin_si", env.get("pmin"))
+    pmax_si = env.get("pmax_si", 100.0)
+    vmin_si = env.get("vmin_si", 0.0)
     vmax_si = env.get("vmax_si", env.get("vmax"))
+    use_pmin = bool(env.get("use_pmin", True))
+    use_pmax = bool(env.get("use_pmax", False))
+    use_vmin = bool(env.get("use_vmin", False))
+    use_vmax = bool(env.get("use_vmax", True))
+
     pmin_disp = pressure_from_si(pmin_si, units)
+    pmax_disp = pressure_from_si(pmax_si, units)
+    vmin_disp = velocity_from_si(vmin_si, units)
     vmax_disp = velocity_from_si(vmax_si, units)
     st.session_state.pmin = pmin_disp
+    st.session_state.pmax = pmax_disp
+    st.session_state.vmin = vmin_disp
     st.session_state.vmax = vmax_disp
+    st.session_state.use_pmin = use_pmin
+    st.session_state.use_pmax = use_pmax
+    st.session_state.use_vmin = use_vmin
+    st.session_state.use_vmax = use_vmax
 
     fixed_list = prob.get("FixedPipes", [])
     fixed_str = ", ".join(str(int(x) + 1) for x in fixed_list)
@@ -1264,7 +1375,13 @@ def _restore_from_snapshot(data: dict):
         "rs_mode_input":     cfg.get("rs_mode") or "random",
         "rs_perturb_input":  float(cfg.get("rs_perturb") or 0.3),
         "pmin_input":        float(pmin_disp),
+        "pmax_input":        float(pmax_disp),
+        "vmin_input":        float(vmin_disp),
         "vmax_input":        float(vmax_disp),
+        "use_pmin_input":    use_pmin,
+        "use_pmax_input":    use_pmax,
+        "use_vmin_input":    use_vmin,
+        "use_vmax_input":    use_vmax,
         "fixed_pipes_input": fixed_str,
     }
 
@@ -1310,7 +1427,13 @@ def _restore_from_snapshot(data: dict):
         "VariablePipes": np.array(prob["VariablePipes"]),
         "FixedPipes": np.array(prob["FixedPipes"]),
         "Pmin": prob["Pmin"],
+        "Pmax": prob.get("Pmax", 100.0),
+        "Vmin": prob.get("Vmin", 0.0),
         "Vmax": prob["Vmax"],
+        "use_pmin": prob.get("use_pmin", True),
+        "use_pmax": prob.get("use_pmax", False),
+        "use_vmin": prob.get("use_vmin", False),
+        "use_vmax": prob.get("use_vmax", True),
         "Units": prob["Units"],
     }
 
@@ -1686,6 +1809,23 @@ def _get_run_hydraulics(algo: str, run_index: int):
     )
     cache[key] = (Pj, Vp, ok)
     return Pj, Vp, ok
+
+def _constraints_from_snapshot(snap):
+    """Extract the four constraint entries from a problem_snapshot.
+
+    Falls back to the pre-Pmax/Vmin defaults (Pmin on, Vmax on, others
+    off) so old snapshots render correctly.
+    """
+    return {
+        "Pmin": {"enabled": bool(snap.get("use_pmin", True)),
+                 "value": float(snap["Pmin"])},
+        "Pmax": {"enabled": bool(snap.get("use_pmax", False)),
+                 "value": float(snap.get("Pmax", 100.0))},
+        "Vmin": {"enabled": bool(snap.get("use_vmin", False)),
+                 "value": float(snap.get("Vmin", 0.0))},
+        "Vmax": {"enabled": bool(snap.get("use_vmax", True)),
+                 "value": float(snap["Vmax"])},
+    }
 
 def _render_run_selector(widget_key: str):
     """Render the run-selector dropdown, feasibility filter and reset
@@ -2205,14 +2345,15 @@ def _render_design_hydraulics_tab():
     pipe_names = snap["pipe_names"]
     junc_names = snap["junction_names"]
     fixed = set(int(x) for x in snap["FixedPipes"])
-    pmin_si = snap["Pmin"]
-    vmax_si = snap["Vmax"]
     p_unit = units["PressureUnit"]
     v_unit = units["VelocityUnit"]
     L_unit = units["LengthUnit"]
     L_scale = 1.0 if L_unit == "m" else 1.0 / 0.3048
-    pmin = pressure_from_si(pmin_si, units)
-    vmax = velocity_from_si(vmax_si, units)
+    c = _constraints_from_snapshot(snap)
+    pmin = pressure_from_si(c["Pmin"]["value"], units) if c["Pmin"]["enabled"] else None
+    pmax = pressure_from_si(c["Pmax"]["value"], units) if c["Pmax"]["enabled"] else None
+    vmin = velocity_from_si(c["Vmin"]["value"], units) if c["Vmin"]["enabled"] else None
+    vmax = velocity_from_si(c["Vmax"]["value"], units) if c["Vmax"]["enabled"] else None
 
     st.subheader("Select a run")
     algo, run_index, run, best_cost = _render_run_selector(
@@ -2245,6 +2386,11 @@ def _render_design_hydraulics_tab():
         L = snap["L"][i]
         d_m = pos[i] if pos is not None else snap["initial_D"][i]
         v_disp = Vp[i] if i < len(Vp) else float("nan")
+        v_status = "OK"
+        if c["Vmin"]["enabled"] and Vp_si[i] < c["Vmin"]["value"]:
+            v_status = f"< Vmin ({vmin:.2f})"
+        elif c["Vmax"]["enabled"] and Vp_si[i] > c["Vmax"]["value"]:
+            v_status = f"> Vmax ({vmax:.2f})"
         rows.append({
             "Pipe ID": i + 1,
             "Name": name,
@@ -2252,6 +2398,7 @@ def _render_design_hydraulics_tab():
             "Diameter (mm)": f"{d_m * 1000:.1f}",
             "Diameter (in)": f"{d_m / 0.0254:.2f}",
             f"Velocity ({v_unit})": f"{v_disp:.3f}",
+            "Velocity check": v_status,
             "Status": "FIXED" if i in fixed else "variable",
         })
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
@@ -2260,29 +2407,35 @@ def _render_design_hydraulics_tab():
     st.subheader("Node pressures")
     rows = []
     for k, name in enumerate(junc_names):
-        violation = Pj_si[k] < pmin_si
+        status = "OK"
+        if c["Pmin"]["enabled"] and Pj_si[k] < c["Pmin"]["value"]:
+            status = f"< Pmin ({pmin:.2f} {p_unit})"
+        elif c["Pmax"]["enabled"] and Pj_si[k] > c["Pmax"]["value"]:
+            status = f"> Pmax ({pmax:.2f} {p_unit})"
         rows.append({
             "Node ID": k + 1,
             "Name": name,
             f"Pressure ({p_unit})": f"{Pj[k]:.3f}",
-            "Status": (
-                f"Violation (<{pmin:.2f} {p_unit})"
-                if violation else "OK"
-            ),
+            "Status": status,
         })
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
     fig = go.Figure()
+    def _p_viol(k):
+        return ((c["Pmin"]["enabled"] and Pj_si[k] < c["Pmin"]["value"])
+                or (c["Pmax"]["enabled"] and Pj_si[k] > c["Pmax"]["value"]))
     fig.add_trace(go.Bar(
         x=junc_names, y=Pj,
-        marker_color=[
-            "#e74c3c" if Pj_si[i] < pmin_si else "#2ecc71"
-            for i in range(len(Pj))
-        ],
+        marker_color=["#e74c3c" if _p_viol(i) else "#2ecc71"
+                      for i in range(len(Pj))],
         text=[f"{p:.2f}" for p in Pj], textposition="outside",
     ))
-    fig.add_hline(y=pmin, line_dash="dash", line_color="red",
-                  annotation_text=f"Pmin = {pmin:.2f} {p_unit}")
+    if pmin is not None:
+        fig.add_hline(y=pmin, line_dash="dash", line_color="red",
+                      annotation_text=f"Pmin = {pmin:.2f} {p_unit}")
+    if pmax is not None:
+        fig.add_hline(y=pmax, line_dash="dash", line_color="red",
+                      annotation_text=f"Pmax = {pmax:.2f} {p_unit}")
     fig.update_layout(height=320, yaxis_title=f"Pressure ({p_unit})",
                       margin=dict(l=20, r=20, t=20, b=20))
     st.plotly_chart(fig, width="stretch")
@@ -2290,16 +2443,21 @@ def _render_design_hydraulics_tab():
     # ---- Pipe velocities (chart; exact values in the pipe table above) ----
     st.subheader("Pipe velocities")
     fig = go.Figure()
+    def _v_viol(i):
+        return ((c["Vmin"]["enabled"] and Vp_si[i] < c["Vmin"]["value"])
+                or (c["Vmax"]["enabled"] and Vp_si[i] > c["Vmax"]["value"]))
     fig.add_trace(go.Bar(
         x=pipe_names, y=Vp,
-        marker_color=[
-            "#e74c3c" if Vp_si[i] > vmax_si else "#3498db"
-            for i in range(len(Vp))
-        ],
+        marker_color=["#e74c3c" if _v_viol(i) else "#3498db"
+                      for i in range(len(Vp))],
         text=[f"{v:.2f}" for v in Vp], textposition="outside",
     ))
-    fig.add_hline(y=vmax, line_dash="dash", line_color="red",
-                  annotation_text=f"Vmax = {vmax:.2f} {v_unit}")
+    if vmin is not None:
+        fig.add_hline(y=vmin, line_dash="dash", line_color="red",
+                      annotation_text=f"Vmin = {vmin:.2f} {v_unit}")
+    if vmax is not None:
+        fig.add_hline(y=vmax, line_dash="dash", line_color="red",
+                      annotation_text=f"Vmax = {vmax:.2f} {v_unit}")
     fig.update_layout(
         height=320, yaxis_title=f"Velocity ({v_unit})",
         margin=dict(l=20, r=20, t=20, b=20),
@@ -2386,14 +2544,18 @@ def _render_map_tab():
             n: diameter_to_display(pos[i], units)
             for i, n in enumerate(snap["pipe_names"])
         }
-        pmin = pressure_from_si(snap["Pmin"], units)
-        vmax = velocity_from_si(snap["Vmax"], units)
         fixed_1based = [int(x) + 1 for x in snap["FixedPipes"]]
 
+    # Before calling build_network_figure
+    c = _constraints_from_snapshot(snap) if snap is not None else None
+    pmin_for_map = (pressure_from_si(c["Pmin"]["value"], units)
+                    if c and c["Pmin"]["enabled"] else None)
+    vmax_for_map = (velocity_from_si(c["Vmax"]["value"], units)
+                    if c and c["Vmax"]["enabled"] else None)
     fig = build_network_figure(
         wn, mode=mode,
         pressures=pressures, velocities=velocities, diameters=diameters,
-        pmin=pmin, vmax=vmax,
+        pmin=pmin_for_map, vmax=vmax_for_map,
         fixed_pipe_indices=fixed_1based,
         show_labels=show_labels,
         units=units,
