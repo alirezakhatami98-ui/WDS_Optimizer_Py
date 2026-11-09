@@ -4,6 +4,8 @@ import numpy as np
 import plotly.graph_objects as go
 import wntr
 
+from wds_optimizer.optimization.severity import two_sided_severity
+
 
 def build_network_figure(wn, mode="preview",
                          pressures=None, velocities=None,
@@ -52,19 +54,6 @@ def build_network_figure(wn, mode="preview",
     v_unit = u.get("VelocityUnit", "m/s")
     d_unit = u.get("DiameterUnit", "mm")
 
-    # ---- Helpers ----
-    def _two_sided_severity(value, low, high):
-        """0 = inside [low, high], up to 1 = severe violation."""
-        if not np.isfinite(value):
-            return 1.0
-        if low is not None and value < low:
-            span = max(abs(low), 1e-9)
-            return min(1.0, (low - value) / span)
-        if high is not None and value > high:
-            span = max(abs(high), 1e-9)
-            return min(1.0, (value - high) / span)
-        return 0.0
-
     def _pressure_hint():
         parts = []
         if pmin is not None:
@@ -90,9 +79,9 @@ def build_network_figure(wn, mode="preview",
         vals_finite = [v for v in hover_val if np.isfinite(v)]
 
         if vmin is not None and vmax is not None:
-            # Two-sided: severity colouring (green=OK, red=violation)
-            color_vals = [_two_sided_severity(v, vmin, vmax)
-                          for v in hover_val]
+            # Two-sided: severity colouring (green=OK, red=violation).
+            # NaN inputs stay NaN; _val_to_color renders them gray.
+            color_vals = two_sided_severity(hover_val, vmin, vmax)
             colorscale = "RdYlGn_r"
             cmin, cmax = 0.0, 1.0
             cbar_title = (f"Velocity severity ({v_unit}) — "
@@ -195,9 +184,9 @@ def build_network_figure(wn, mode="preview",
         vals_finite = [v for v in junc_vals if np.isfinite(v)]
 
         if pmin is not None and pmax is not None:
-            # Two-sided: severity colouring
-            node_color_vals = [_two_sided_severity(v, pmin, pmax)
-                               for v in junc_vals]
+            # Two-sided: severity colouring.  NaN stays NaN; the
+            # rendering path below already returns gray for it.
+            node_color_vals = two_sided_severity(junc_vals, pmin, pmax)
             node_colorscale = "RdYlGn_r"
             cmin_p, cmax_p = 0.0, 1.0
             cbar_title_p = (f"Pressure severity ({p_unit}) — "

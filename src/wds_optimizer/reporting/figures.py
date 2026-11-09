@@ -7,8 +7,10 @@ import io
 import numpy as np
 from matplotlib import colormaps
 from matplotlib import colors as mcolors
-from matplotlib.cm import ScalarMappable          # ← این خط
+from matplotlib.cm import ScalarMappable
 from matplotlib.figure import Figure
+
+from ..optimization.severity import two_sided_severity
 
 
 # =====================================================================
@@ -232,23 +234,6 @@ def make_network_map_png(
     v_unit = units.get("VelocityUnit", "m/s")
     d_unit = units.get("DiameterUnit", "m")
 
-    def _two_sided_severity(values, low, high):
-        """0 = inside [low, high]; up to 1 = severe violation."""
-        arr = np.asarray(values, dtype=float)
-        sev = np.zeros_like(arr)
-        if low is not None:
-            below = arr < low
-            span = max(abs(float(low)), 1e-9)
-            sev[below] = np.clip((low - arr[below]) / span, 0.0, 1.0)
-        if high is not None:
-            above = arr > high
-            span = max(abs(float(high)), 1e-9)
-            sev[above] = np.maximum(
-                sev[above],
-                np.clip((arr[above] - high) / span, 0.0, 1.0),
-            )
-        return sev
-
     fig = Figure(figsize=(8, 8))
     ax = fig.add_subplot(111)
 
@@ -273,7 +258,7 @@ def make_network_map_png(
 
         if vmin_disp is not None and vmax_disp is not None:
             pipe_cmap = colormaps["RdYlGn_r"]
-            pipe_color_vals = _two_sided_severity(vals, vmin_disp, vmax_disp)
+            pipe_color_vals = two_sided_severity(vals, vmin_disp, vmax_disp)
             pipe_norm = mcolors.Normalize(vmin=0.0, vmax=1.0)
             pipe_cbar_label = (f"Velocity severity ({v_unit}) — "
                                f"green=OK, red=violation")
@@ -328,7 +313,12 @@ def make_network_map_png(
             continue
 
         if pipe_cmap is not None and pipe_color_vals is not None:
-            color = pipe_cmap(pipe_norm(pipe_color_vals[i]))
+            # NaN → neutral gray (matplotlib's default "bad" colour
+            # is transparent, which hides the pipe entirely — fixing
+            # the pre-refactor bug where NaN pipes were invisible).
+            val = pipe_color_vals[i]
+            color = (pipe_cmap(pipe_norm(val))
+                     if np.isfinite(val) else "#b4b4b4")
         else:
             color = "#999999"
         lw = 1 + 4 * (D_disp[i] - dmin) / max(dmax - dmin, 1e-9)
@@ -358,7 +348,7 @@ def make_network_map_png(
 
         if pmin_disp is not None and pmax_disp is not None:
             junc_cmap = colormaps["RdYlGn_r"]
-            junc_color_vals = _two_sided_severity(
+            junc_color_vals = two_sided_severity(
                 jp_disp, pmin_disp, pmax_disp,
             )
             junc_norm = mcolors.Normalize(vmin=0.0, vmax=1.0)
@@ -390,7 +380,10 @@ def make_network_map_png(
             junc_cbar_label = f"Pressure ({p_unit})"
 
     if junc_cmap is not None and junc_color_vals is not None:
-        node_colors = [junc_cmap(junc_norm(v)) for v in junc_color_vals]
+        node_colors = [
+            (junc_cmap(junc_norm(v)) if np.isfinite(v) else "#b4b4b4")
+            for v in junc_color_vals
+        ]
     else:
         node_colors = ["#dddddd"] * len(jx)
 
