@@ -195,8 +195,34 @@ def make_network_map_png(
     wn, pipe_names, junction_names, position_m,
     pipe_velocities, node_pressures,
     mode="velocity", fixed_pipe_indices=None,
-    pmin=None, vmax=None, units=None,
+    pmin=None, pmax=None, vmin=None, vmax=None, units=None,
 ) -> bytes:
+    """Static network map for the reproducibility report.
+
+    Mirrors the interactive map (``wds_optimizer.app.network_map``) so
+    the PNG embedded in the ZIP shows the same information as the app.
+    All four constraints are optional; pass ``None`` for any that are
+    disabled, and the figure omits its colouring influence.
+
+    Colour semantics (matching build_network_figure):
+
+    Pressure (nodes)
+        Pmin only  → RdYlGn   (red = low pressure = violation)
+        Pmax only  → RdYlGn_r (red = high pressure = violation)
+        both       → RdYlGn_r on a severity scale (0 = OK, 1 = severe)
+        neither    → gray
+
+    Velocity (pipes)
+        Vmax only  → RdYlGn_r (red = high velocity = violation)
+        Vmin only  → RdYlGn   (red = low velocity = violation)
+        both       → RdYlGn_r on a severity scale
+        neither    → gray
+
+    Backward compatibility: with only Pmin and Vmax supplied (the
+    pre-Pmax/Vmin defaults), the colour range and colormaps reproduce
+    the old implementation exactly, so archived reports remain
+    visually comparable.
+    """
     from ..hydraulics.units import (
         diameter_to_display, pressure_from_si, velocity_from_si,
     )
@@ -206,6 +232,23 @@ def make_network_map_png(
     v_unit = units.get("VelocityUnit", "m/s")
     d_unit = units.get("DiameterUnit", "m")
 
+    def _two_sided_severity(values, low, high):
+        """0 = inside [low, high]; up to 1 = severe violation."""
+        arr = np.asarray(values, dtype=float)
+        sev = np.zeros_like(arr)
+        if low is not None:
+            below = arr < low
+            span = max(abs(float(low)), 1e-9)
+            sev[below] = np.clip((low - arr[below]) / span, 0.0, 1.0)
+        if high is not None:
+            above = arr > high
+            span = max(abs(float(high)), 1e-9)
+            sev[above] = np.maximum(
+                sev[above],
+                np.clip((arr[above] - high) / span, 0.0, 1.0),
+            )
+        return sev
+
     fig = Figure(figsize=(8, 8))
     ax = fig.add_subplot(111)
 
@@ -214,31 +257,63 @@ def make_network_map_png(
     D_disp = np.array([diameter_to_display(d, units) for d in D_si])
     dmin, dmax = D_disp.min(), D_disp.max()
 
-    # Choose coloring
+    # --------------------------------------------------------------
+    # Decide pipe colormap/norm
+    # --------------------------------------------------------------
+    pipe_cmap = None
+    pipe_norm = None
+    pipe_color_vals = None
+    pipe_cbar_label = ""
+
     if mode == "velocity":
-        cmap = colormaps["RdYlGn_r"]
         vals_si = np.asarray(pipe_velocities, dtype=float)
         vals = np.array([velocity_from_si(v, units) for v in vals_si])
-        vmax_disp = velocity_from_si(vmax or 0.0, units) if vmax else None
-        vmax_val = max(vmax_disp or 0.0,
-                       vals.max() * 1.05 if len(vals) else 1.0)
-        norm = mcolors.Normalize(vmin=0.0, vmax=vmax_val)
-        cbar_label = f"Velocity ({v_unit})"
-    elif mode == "diameter":
-        cmap = colormaps["viridis"]
-        vals = D_disp
-        norm = mcolors.Normalize(
-            vmin=vals.min(),
-            vmax=vals.max() if vals.max() > vals.min() else vals.min() + 1e-9,
-        )
-        cbar_label = f"Diameter ({d_unit})"
-    else:
-        cmap = None
-        norm = None
-        vals = None
-        cbar_label = ""
+        vmin_disp = velocity_from_si(vmin, units) if vmin is not None else None
+        vmax_disp = velocity_from_si(vmax, units) if vmax is not None else None
 
-    # Pipes
+        if vmin_disp is not None and vmax_disp is not None:
+            pipe_cmap = colormaps["RdYlGn_r"]
+            pipe_color_vals = _two_sided_severity(vals, vmin_disp, vmax_disp)
+            pipe_norm = mcolors.Normalize(vmin=0.0, vmax=1.0)
+            pipe_cbar_label = (f"Velocity severity ({v_unit}) — "
+                               f"green=OK, red=violation")
+        elif vmin_disp is not None:
+            pipe_cmap = colormaps["RdYlGn"]
+            pipe_color_vals = vals
+            lo = min(float(vals.min()) if len(vals) else vmin_disp,
+                     vmin_disp)
+            hi = float(vals.max()) if len(vals) else vmin_disp * 2
+            if hi <= lo:
+                hi = lo + 1.0
+            pipe_norm = mcolors.Normalize(vmin=lo, vmax=hi)
+            pipe_cbar_label = f"Velocity ({v_unit})"
+        elif vmax_disp is not None:
+            pipe_cmap = colormaps["RdYlGn_r"]
+            pipe_color_vals = vals
+            # Reproduces the previous behaviour exactly:
+            #   vmax_val = max(vmax_disp, vals.max() * 1.05)
+            vmax_val = max(vmax_disp,
+                           float(vals.max()) * 1.05 if len(vals) else 1.0)
+            pipe_norm = mcolors.Normalize(vmin=0.0, vmax=vmax_val)
+            pipe_cbar_label = f"Velocity ({v_unit})"
+        # else: leave all None → gray preview
+
+    elif mode == "diameter":
+        pipe_cmap = colormaps["viridis"]
+        pipe_color_vals = D_disp
+        if len(D_disp):
+            dmin_v = float(D_disp.min())
+            dmax_v = float(D_disp.max())
+            if dmax_v <= dmin_v:
+                dmax_v = dmin_v + 1e-9
+        else:
+            dmin_v, dmax_v = 0.0, 1.0
+        pipe_norm = mcolors.Normalize(vmin=dmin_v, vmax=dmax_v)
+        pipe_cbar_label = f"Diameter ({d_unit})"
+
+    # --------------------------------------------------------------
+    # Draw pipes
+    # --------------------------------------------------------------
     for i, pname in enumerate(pipe_names):
         link = wn.get_link(pname)
         n0, n1 = link.start_node_name, link.end_node_name
@@ -252,14 +327,16 @@ def make_network_map_png(
                     linestyle="--", zorder=2)
             continue
 
-        if mode in ("velocity", "diameter"):
-            color = cmap(norm(vals[i]))
+        if pipe_cmap is not None and pipe_color_vals is not None:
+            color = pipe_cmap(pipe_norm(pipe_color_vals[i]))
         else:
             color = "#999999"
         lw = 1 + 4 * (D_disp[i] - dmin) / max(dmax - dmin, 1e-9)
         ax.plot(x, y, color=color, linewidth=lw, zorder=2)
 
-    # Junctions
+    # --------------------------------------------------------------
+    # Decide junction colormap/norm
+    # --------------------------------------------------------------
     jx, jy, jp_si, jnames = [], [], [], []
     for i, n in enumerate(junction_names):
         x, y = wn.get_node(n).coordinates
@@ -268,16 +345,52 @@ def make_network_map_png(
         jnames.append(n)
         jp_si.append(node_pressures[i])
 
+    junc_cmap = None
+    junc_norm = None
+    junc_color_vals = None
+    junc_cbar_label = ""
+    pmin_disp = pmax_disp = None       # for the title
+
     if mode == "pressure":
-        jp_disp = [pressure_from_si(p, units) for p in jp_si]
-        pmin_disp = pressure_from_si(pmin or 0.0, units) if pmin else 0.0
-        cmap_p = colormaps["RdYlGn"]
-        lo = min(min(jp_disp), pmin_disp)
-        hi = max(max(jp_disp), pmin_disp)
-        if hi <= lo:
-            hi = lo + 1.0
-        norm_p = mcolors.Normalize(vmin=lo, vmax=hi)
-        node_colors = [cmap_p(norm_p(v)) for v in jp_disp]
+        jp_disp = np.array([pressure_from_si(p, units) for p in jp_si])
+        pmin_disp = pressure_from_si(pmin, units) if pmin is not None else None
+        pmax_disp = pressure_from_si(pmax, units) if pmax is not None else None
+
+        if pmin_disp is not None and pmax_disp is not None:
+            junc_cmap = colormaps["RdYlGn_r"]
+            junc_color_vals = _two_sided_severity(
+                jp_disp, pmin_disp, pmax_disp,
+            )
+            junc_norm = mcolors.Normalize(vmin=0.0, vmax=1.0)
+            junc_cbar_label = (f"Pressure severity ({p_unit}) — "
+                               f"green=OK, red=violation")
+        elif pmin_disp is not None:
+            junc_cmap = colormaps["RdYlGn"]
+            junc_color_vals = jp_disp
+            # Reproduces the previous behaviour exactly:
+            #   lo = min(jp_disp.min(), pmin_disp)
+            #   hi = max(jp_disp.max(), pmin_disp)
+            lo = min(float(jp_disp.min()) if len(jp_disp) else pmin_disp,
+                     pmin_disp)
+            hi = max(float(jp_disp.max()) if len(jp_disp) else pmin_disp,
+                     pmin_disp)
+            if hi <= lo:
+                hi = lo + 1.0
+            junc_norm = mcolors.Normalize(vmin=lo, vmax=hi)
+            junc_cbar_label = f"Pressure ({p_unit})"
+        elif pmax_disp is not None:
+            junc_cmap = colormaps["RdYlGn_r"]
+            junc_color_vals = jp_disp
+            lo = float(jp_disp.min()) if len(jp_disp) else 0.0
+            hi = max(float(jp_disp.max()) if len(jp_disp) else pmax_disp,
+                     pmax_disp)
+            if hi <= lo:
+                hi = lo + 1.0
+            junc_norm = mcolors.Normalize(vmin=lo, vmax=hi)
+            junc_cbar_label = f"Pressure ({p_unit})"
+
+    if junc_cmap is not None and junc_color_vals is not None:
+        node_colors = [junc_cmap(junc_norm(v)) for v in junc_color_vals]
     else:
         node_colors = ["#dddddd"] * len(jx)
 
@@ -299,16 +412,32 @@ def make_network_map_png(
 
     ax.set_aspect("equal")
     ax.axis("off")
-    ax.set_title(f"Network Map ({mode})")
 
-    # Colorbar
-    if mode in ("velocity", "diameter"):
-        sm = ScalarMappable(cmap=cmap, norm=norm)
+    # ---- Title: append the active constraint values (the PNG has no
+    # hover, so the values must live in the title). ----
+    title_parts = [f"Network Map ({mode})"]
+    if mode == "pressure":
+        if pmin_disp is not None:
+            title_parts.append(f"Pmin={pmin_disp:.2f} {p_unit}")
+        if pmax_disp is not None:
+            title_parts.append(f"Pmax={pmax_disp:.2f} {p_unit}")
+    elif mode == "velocity":
+        if vmin is not None:
+            title_parts.append(
+                f"Vmin={velocity_from_si(vmin, units):.2f} {v_unit}")
+        if vmax is not None:
+            title_parts.append(
+                f"Vmax={velocity_from_si(vmax, units):.2f} {v_unit}")
+    ax.set_title(" — ".join(title_parts))
+
+    # ---- Colorbar ----
+    if pipe_cmap is not None and mode in ("velocity", "diameter"):
+        sm = ScalarMappable(cmap=pipe_cmap, norm=pipe_norm)
         sm.set_array([])
-        fig.colorbar(sm, ax=ax, label=cbar_label, shrink=0.7)
-    elif mode == "pressure":
-        sm = ScalarMappable(cmap=cmap_p, norm=norm_p)
+        fig.colorbar(sm, ax=ax, label=pipe_cbar_label, shrink=0.7)
+    elif mode == "pressure" and junc_cmap is not None:
+        sm = ScalarMappable(cmap=junc_cmap, norm=junc_norm)
         sm.set_array([])
-        fig.colorbar(sm, ax=ax, label=f"Pressure ({p_unit})", shrink=0.7)
+        fig.colorbar(sm, ax=ax, label=junc_cbar_label, shrink=0.7)
 
     return _to_png(fig)

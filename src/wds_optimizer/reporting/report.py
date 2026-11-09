@@ -95,11 +95,16 @@ def build_report_zip(
          vmin_si=vmin_fig)
     if wn is not None:
         for mode in ("velocity", "diameter", "pressure"):
+            # Pass all four constraints (None = disabled).  The figure
+            # mirrors the app's interactive map: single-constraint
+            # colouring preserves the previous behaviour; two-sided
+            # uses a green=OK / red=violation severity scale.
             _try(f"network_map_{mode}.png", make_network_map_png,
                  wn, pipe_names, junction_names, best_position_m,
                  pipe_velocities, node_pressures,
                  mode=mode, fixed_pipe_indices=fixed_pipes,
-                 pmin=pmin, vmax=vmax, units=units)
+                 pmin=pmin_fig, pmax=pmax_fig,
+                 vmin=vmin_fig, vmax=vmax_fig, units=units)
 
     # ---- Snapshot ----
     try:
