@@ -109,6 +109,96 @@ def _config():
         "rs_keep_best": False, "rs_mode": "perturb", "rs_perturb": 0.3,
     }
 
+def _old_shape_snapshot_dict() -> dict:
+    """A dict as written by the *previous* (pre-Pmax/Vmin) app version.
+
+    This bypasses ``build_snapshot`` deliberately: the current
+    ``build_snapshot`` fills in the new keys via ``.get(..., default)``
+    (correct behaviour for *new* saves), so passing old-shape input
+    through it produces a new-shape output — which does not exercise
+    the backward-compat path in ``restore_experiment``.
+
+    To test what actually happens when a user loads a file downloaded
+    from the previous app version, we must construct the on-disk shape
+    by hand: no ``Pmax``, no ``Vmin``, no ``use_*`` keys anywhere.
+
+    The shape below matches what the pre-Pmax/Vmin ``build_snapshot``
+    wrote; a snapshot written by that version and stored under
+    ``experiment.json`` looks exactly like this.
+    """
+    return {
+        "version": "0.3.0",
+        "timestamp": "2025-01-01T00:00:00",
+        "environment": {
+            "diam_unit": "mm",
+            "pmin_si": 30.0,
+            "vmax_si": 2.5,
+            "pmin": 30.0,
+            "vmax": 2.5,
+            # No pmax_si, vmin_si, use_pmin/pmax/vmin/vmax here
+        },
+        "config": _config(),
+        "problem": {
+            "pipe_names": ["P1", "P2", "P3"],
+            "junction_names": ["J1", "J2", "J3"],
+            "L": [100.0, 100.0, 100.0],
+            "initial_D": [0.2, 0.2, 0.2],
+            "D_m": [0.1, 0.2, 0.3],
+            "Din": [4.0, 8.0, 12.0],
+            "Cost": [1.0, 2.0, 3.0],
+            "VariablePipes": [0, 1, 2],
+            "FixedPipes": [],
+            "Pmin": 30.0,
+            "Vmax": 2.5,
+            "Units": {
+                "System": "SI", "PressureUnit": "m",
+                "VelocityUnit": "m/s", "LengthUnit": "m",
+                "DiameterUnit": "mm",
+            },
+            # No Pmax, Vmin, use_pmin/pmax/vmin/vmax here
+        },
+        "experiment": {
+            "experiment_id": "test_20260101_000000",
+            "number_of_runs": 1,
+            "algorithms": ["GA"],
+            "experiment_seed": 42,
+            "NS": 10,
+            "MaxGen": 10,
+            "cancelled": False,
+            "restart": {"enabled": False},
+            "runs": {
+                "GA": [{
+                    "algorithm": "GA",
+                    "run_index": 1,
+                    "seed": 1,
+                    "score": 100.0,
+                    "position": [0.2, 0.2, 0.2],
+                    "feasible": True,
+                    "execution_time": 0.1,
+                    "convergence": [100.0, 100.0],
+                    "status": "Success",
+                    "error_message": "",
+                    "restart_gens": [],
+                    "nfe": 100,
+                    "n_sim": 100,
+                    "nfe_to_best": 50,
+                    "extra": {},
+                    "epoch_bests": [],
+                }],
+            },
+        },
+        "best": {
+            "algorithm": "GA",
+            "run_index": 1,
+            "position": [0.2, 0.2, 0.2],
+        },
+        "hydraulics": {
+            "node_pressures": [40.0, 35.0, 45.0],
+            "pipe_velocities": [1.0, 1.5, 2.0],
+            "converged": True,
+        },
+    }
+
 
 def _build_snapshot(exp, snap, **extra):
     return build_snapshot(
@@ -141,19 +231,28 @@ def _roundtrip_dict(snapshot: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def test_old_snapshot_loads_with_legacy_defaults():
-    """A snapshot lacking Pmax/Vmin/use_* keys restores with defaults."""
-    exp_old = _minimal_experiment(with_constraint_fields=False)
-    snap_old = _problem_snapshot(with_pmax_vmin=False)
-    snap = _build_snapshot(exp_old, snap_old)
-    snap = _roundtrip_dict(snap)
+    """A pre-Pmax/Vmin snapshot dict restores with legacy defaults.
 
-    # The new keys must be absent (proving the test really is old-shape)
-    assert "use_pmin" not in snap["problem"]
-    assert "use_pmax" not in snap["problem"]
-    assert "Pmax" not in snap["problem"]
-    assert "Vmin" not in snap["problem"]
+    We construct the on-disk shape by hand (via
+    ``_old_shape_snapshot_dict``) rather than calling
+    ``build_snapshot`` on old-shape input, because the current
+    ``build_snapshot`` fills in the new keys via ``.get(..., default)``
+    — which is correct for *new* saves but would defeat the purpose of
+    this test.
+    """
+    old = _old_shape_snapshot_dict()
 
-    restored = restore_experiment(snap)
+    # Prove the test really is old-shape — otherwise we are not testing
+    # the backward-compat path at all.
+    assert "use_pmin" not in old["problem"]
+    assert "use_pmax" not in old["problem"]
+    assert "Pmax" not in old["problem"]
+    assert "Vmin" not in old["problem"]
+    assert "use_pmin" not in old["environment"]
+    assert "pmax_si" not in old["environment"]
+    assert "vmin_si" not in old["environment"]
+
+    restored = restore_experiment(old)
     # Pre-Pmax/Vmin behaviour: Pmin on, Vmax on, others off
     assert restored.use_pmin is True
     assert restored.use_vmax is True
@@ -167,11 +266,9 @@ def test_old_snapshot_loads_with_legacy_defaults():
 
 def test_old_snapshot_preserves_run_records():
     """Backward compat must not corrupt existing run data."""
-    exp_old = _minimal_experiment(with_constraint_fields=False)
-    snap_old = _problem_snapshot(with_pmax_vmin=False)
-    snap = _roundtrip_dict(_build_snapshot(exp_old, snap_old))
+    old = _old_shape_snapshot_dict()
 
-    restored = restore_experiment(snap)
+    restored = restore_experiment(old)
     assert len(restored.runs["GA"]) == 1
     r = restored.runs["GA"][0]
     assert r.status == "Success"
