@@ -237,8 +237,10 @@ def test_benchmark_unknown_name_errors():
 # Diameter-unit sanity check (commit 3.5)
 # ---------------------------------------------------------------------------
 
-D_TXT_INCHES_FOR_SI = "8\n10\n12\n14\n16\n18\n"   # looks like inches
-D_TXT_MM_FOR_US     = "6\n8\n10\n12\n"            # looks like inches, US net
+# Three values, matching the 3-pipe test network.  Using 6 values would
+# trip ``load_optimization_data``'s count consistency check before the
+# sanity warning is even evaluated.
+D_TXT_INCHES_FOR_SI = "8\n10\n12\n"   # max < 50: looks like inches
 
 
 def test_validate_warns_when_mm_values_look_like_inches(files, tmp_path):
@@ -279,3 +281,47 @@ def test_run_warns_on_suspicious_diam_unit(files, tmp_path):
     assert code in (0, 1)
     assert "unusually small" in err
     assert "--diam-unit in" in err
+
+# ---------------------------------------------------------------------------
+# CLI output must remain ASCII (Windows portability guard)
+# ---------------------------------------------------------------------------
+
+def test_cli_source_has_no_non_ascii_outside_comments():
+    """Guard against UnicodeEncodeError on Windows.
+
+    Windows consoles with cp1252 / cp1256 codepages raise
+    UnicodeEncodeError when a non-ASCII character reaches stdout or
+    stderr through a pipe (which is what happens when the CLI is
+    invoked by ``subprocess.run(capture_output=True)``, piped to a
+    file, or run in CI).
+
+    This test strips ``#`` comments and fails if any non-ASCII bytes
+    remain in ``cli.py``'s source.  Docstrings are also caught — if a
+    contributor ever needs non-ASCII prose in a docstring, they should
+    move it to a comment.
+    """
+    import re as _re
+    src_path = (
+        Path(__file__).resolve().parent.parent
+        / "src" / "wds_optimizer" / "cli.py"
+    )
+    text = src_path.read_text(encoding="utf-8")
+    # Strip line comments.  (Docstrings are left in — a bit conservative,
+    # but the CLI currently has no non-ASCII docstrings, so it stays true.)
+    no_comments = "\n".join(
+        line.split("#", 1)[0] for line in text.splitlines()
+    )
+    leaked = sorted({
+        (ch, f"U+{ord(ch):04X}")
+        for ch in no_comments
+        if ord(ch) > 127
+    })
+    if leaked:
+        pytest.fail(
+            "cli.py contains non-ASCII characters that may reach "
+            "stdout/stderr via print().  Windows consoles with non-UTF-8 "
+            "codepages raise UnicodeEncodeError on these characters.\n"
+            f"Found: {leaked}\n"
+            "Use ASCII equivalents: '[!]' for warnings, '->' for arrows, "
+            "'-' for dashes."
+        )

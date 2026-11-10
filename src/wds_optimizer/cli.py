@@ -225,28 +225,33 @@ def _sanity_check_diam_unit(
     system = units.get("System", "")
     d_min, d_max = min(d_values), max(d_values)
 
+    # NOTE: ASCII-only return strings.  Windows consoles with cp1252 /
+    # cp1256 raise UnicodeEncodeError on non-ASCII output when stdout/
+    # stderr are pipes (e.g. when piped to a file or captured by a
+    # test harness).  Keep this function's output ASCII so the CLI is
+    # portable.
     if system == "SI" and diam_unit == "mm" and d_max < 50:
         return (
-            f"D.txt values are {d_min:g}–{d_max:g} mm, unusually small "
+            f"D.txt values are {d_min:g}-{d_max:g} mm, unusually small "
             f"for an SI (metric) network.  If D.txt is in inches, use "
-            f"--diam-unit in  (→ {d_min * 25.4:.1f}–{d_max * 25.4:.1f} mm)."
+            f"--diam-unit in  (-> {d_min * 25.4:.1f}-{d_max * 25.4:.1f} mm)."
         )
     if system == "SI" and diam_unit == "in" and d_min > 100:
         return (
-            f"D.txt values are {d_min:g}–{d_max:g} in, unusually large.  "
+            f"D.txt values are {d_min:g}-{d_max:g} in, unusually large.  "
             f"If D.txt is in millimetres, use --diam-unit mm."
         )
     if system == "US" and diam_unit == "in" and d_min > 100:
         return (
-            f"D.txt values are {d_min:g}–{d_max:g} in, unusually large "
+            f"D.txt values are {d_min:g}-{d_max:g} in, unusually large "
             f"for a US network.  If D.txt is in millimetres, use "
             f"--diam-unit mm."
         )
     if system == "US" and diam_unit == "mm" and d_max < 50:
         return (
-            f"D.txt values are {d_min:g}–{d_max:g} mm, unusually small "
+            f"D.txt values are {d_min:g}-{d_max:g} mm, unusually small "
             f"for a US network.  If D.txt is in inches, use "
-            f"--diam-unit in  (→ {d_min * 25.4:.1f}–{d_max * 25.4:.1f} mm)."
+            f"--diam-unit in  (-> {d_min * 25.4:.1f}-{d_max * 25.4:.1f} mm)."
         )
     return None
 
@@ -296,7 +301,9 @@ def _build_request_from_args(
         w = _sanity_check_diam_unit(units, d_values, args.diam_unit)
         if w:
             print(f"Warning: {w}", file=sys.stderr)
-            print("  Continuing — press Ctrl+C within 3 s to abort.",
+            # "press Ctrl+C..." is ASCII — including the em dash would
+            # trip UnicodeEncodeError on Windows.
+            print("  Continuing - press Ctrl+C within 3 s to abort.",
                   file=sys.stderr, flush=True)
             time.sleep(3)
 
@@ -454,7 +461,7 @@ def cmd_validate(args) -> int:
     if d_values:
         d_min, d_max = min(d_values), max(d_values)
         print(f"  Diameter options: {len(d_values)}  "
-              f"(values {d_min:g}–{d_max:g} {args.diam_unit})")
+              f"(values {d_min:g}-{d_max:g} {args.diam_unit})")
     else:
         print(f"  Diameter options: 0 (file empty or unreadable)")
         print(f"  Warning: D.txt has no numeric values; "
@@ -471,7 +478,8 @@ def cmd_validate(args) -> int:
     # Sanity check: does --diam-unit match the actual values?
     warning = _sanity_check_diam_unit(units, d_values, args.diam_unit)
     if warning:
-        print(f"\n  ⚠  {warning}")
+        # ASCII-only (!).  See comment in _sanity_check_diam_unit.
+        print(f"\n  [!]  {warning}")
         print(f"  (validate still reports OK; re-run with the suggested "
               f"flag to proceed.)")
         return EXIT_OK
