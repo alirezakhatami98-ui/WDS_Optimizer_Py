@@ -270,7 +270,9 @@ def test_to_report_zip_has_expected_structure(files):
 
 def test_progress_callback_receives_generation_events(files):
     events = []
-    req = _basic_request(files, algorithms=["GA"], max_gen=4)
+    # max_gen=5 is the validation floor (matches the GUI's min_value=5);
+    # overriding it to 4 would trip ``OptimizationRequest.validate``.
+    req = _basic_request(files, algorithms=["GA"], max_gen=5)
     run_optimization(req, progress_callback=events.append)
     assert len(events) >= 1
     # Each event has the fields the GUI's live panel uses
