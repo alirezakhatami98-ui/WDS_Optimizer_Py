@@ -28,16 +28,14 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 import streamlit as st
+import wntr
 
 
-# ---------------------------------------------------------------------------
-# streamlit_app.py calls st.set_page_config() at import time; patch it.
-# Once imported, the module's other top-level statements have already run.
-# ---------------------------------------------------------------------------
 with patch("streamlit.set_page_config"):
     from wds_optimizer.app import streamlit_app
 
 from wds_optimizer.app.uploads import read_uploaded
+from wds_optimizer.hydraulics.units import detect_network_units
 
 
 # ---------------------------------------------------------------------------
@@ -154,11 +152,15 @@ def fake_session_state(monkeypatch):
     fake = FakeSessionState(
         inp_path=None, d_path=None, cost_path=None,
         diam_unit="mm",
-        # values (display units, matching the unit system in the test .inp)
         pmin=30.0, pmax=100.0, vmin=0.0, vmax=2.5,
-        # enabled flags (defaults: Pmin on, Vmax on, Pmax & Vmin off)
         use_pmin=True, use_pmax=False, use_vmin=False, use_vmax=True,
         fixed_pipes="",
+        # _prepare_problem reads network_units from session_state
+        # (populated by _upload_cycle / _render_sidebar).  Seed to None
+        # so a caller that forgets to populate it gets a clear error
+        # from _prepare_problem rather than an AttributeError from
+        # FakeSessionState.
+        network_units=None,
     )
     monkeypatch.setattr(st, "session_state", fake)
     return fake
@@ -169,10 +171,24 @@ def fake_session_state(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def _upload_cycle(fake_ss, inp_str, d_str, cost_str):
-    """Simulate one "upload three files" cycle; call _prepare_problem."""
+    """Simulate one "upload three files" cycle; call _prepare_problem.
+
+    Mirrors what the GUI does in ``_render_sidebar``: after saving the
+    uploads, it detects ``network_units`` from the .inp and stores it
+    in session_state.  ``_prepare_problem`` now reads that value
+    instead of re-detecting (the detection was moved into the sidebar
+    to keep the per-experiment path pure).  Without this step here,
+    ``_prepare_problem`` raises ``AttributeError: network_units``.
+    """
     fake_ss.inp_path  = read_uploaded(inp_str.encode(),  "net.inp")
     fake_ss.d_path    = read_uploaded(d_str.encode(),    "D.txt")
     fake_ss.cost_path = read_uploaded(cost_str.encode(), "Cost.txt")
+
+    # Detect network units for this uploaded file, exactly as the GUI
+    # does in _render_sidebar.  Cheap (a few ms), no side effects.
+    wn = wntr.network.WaterNetworkModel(fake_ss.inp_path)
+    fake_ss.network_units = detect_network_units(wn)
+
     return streamlit_app._prepare_problem()
 
 
