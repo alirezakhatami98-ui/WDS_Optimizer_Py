@@ -232,3 +232,50 @@ def test_benchmark_unknown_name_errors():
     code, _, err = _run_cli(["benchmark", "--network", "unknown-net"])
     assert code == 2
     assert "unknown benchmark" in err
+
+# ---------------------------------------------------------------------------
+# Diameter-unit sanity check (commit 3.5)
+# ---------------------------------------------------------------------------
+
+D_TXT_INCHES_FOR_SI = "8\n10\n12\n14\n16\n18\n"   # looks like inches
+D_TXT_MM_FOR_US     = "6\n8\n10\n12\n"            # looks like inches, US net
+
+
+def test_validate_warns_when_mm_values_look_like_inches(files, tmp_path):
+    """SI network + --diam-unit mm + values 8-18 → warning."""
+    d_in = tmp_path / "D_small.txt"
+    d_in.write_text(D_TXT_INCHES_FOR_SI)
+    code, out, _ = _run_cli([
+        "validate", "--inp", files["inp"], "--d", str(d_in),
+        "--cost", files["cost"],
+    ])
+    assert code == 0
+    assert "unusually small" in out
+    assert "--diam-unit in" in out
+
+
+def test_validate_no_warning_for_normal_mm(files):
+    """SI network + --diam-unit mm + values 150-250 → no warning."""
+    code, out, _ = _run_cli([
+        "validate", "--inp", files["inp"], "--d", files["d"],
+        "--cost", files["cost"],
+    ])
+    assert code == 0
+    assert "unusually small" not in out
+    assert "values 150" in out         # shows the actual value range
+
+
+def test_run_warns_on_suspicious_diam_unit(files, tmp_path):
+    """run warns to stderr but proceeds; exit code still 0 or 1."""
+    d_in = tmp_path / "D_small.txt"
+    d_in.write_text(D_TXT_INCHES_FOR_SI)
+    code, _, err = _run_cli([
+        "run",
+        "--inp", files["inp"], "--d", str(d_in),
+        "--cost", files["cost"],
+        "--ns", "10", "--max-gen", "5", "--pmin", "30",
+        "--quiet",
+    ])
+    assert code in (0, 1)
+    assert "unusually small" in err
+    assert "--diam-unit in" in err

@@ -178,6 +178,77 @@ def _detect_display_units(inp_path: str) -> dict:
     wn = _parse_network(inp_path)
     return detect_network_units(wn)
 
+def _read_diameter_values(path: str | Path) -> list[float]:
+    """Read numeric values from a D.txt file (one per line).
+
+    Tolerant: skips blank lines, comment lines (leading ``#``, ``%``,
+    ``/``), and any line whose first whitespace-delimited token is not
+    a number.  Returns the list of floats in file order.
+    """
+    values: list[float] = []
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return values
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line[0] in "#%/":
+            continue
+        try:
+            values.append(float(line.split()[0]))
+        except (ValueError, IndexError):
+            continue
+    return values
+
+
+def _sanity_check_diam_unit(
+    units: dict, d_values: list[float], diam_unit: str,
+) -> str | None:
+    """Warn if D.txt values look inconsistent with ``diam_unit`` and
+    the network's native unit system.
+
+    Heuristic — never fails the run, only returns a warning string
+    (or None if the values look plausible).
+
+    Typical ranges for water distribution pipes:
+
+    - SI networks (LPS/LPM/MLD): 100 – 2000 mm  (= 4 – 80 in)
+    - US networks (GPM/CFS):      4 – 80 in     (= 100 – 2000 mm)
+
+    So ``max(values) < 50`` almost always means the file is in inches
+    being read as mm, and ``min(values) > 100`` almost always means
+    the reverse.  Either case is worth a warning even if the user's
+    answer is "yes, I really mean it".
+    """
+    if not d_values:
+        return None
+    system = units.get("System", "")
+    d_min, d_max = min(d_values), max(d_values)
+
+    if system == "SI" and diam_unit == "mm" and d_max < 50:
+        return (
+            f"D.txt values are {d_min:g}–{d_max:g} mm, unusually small "
+            f"for an SI (metric) network.  If D.txt is in inches, use "
+            f"--diam-unit in  (→ {d_min * 25.4:.1f}–{d_max * 25.4:.1f} mm)."
+        )
+    if system == "SI" and diam_unit == "in" and d_min > 100:
+        return (
+            f"D.txt values are {d_min:g}–{d_max:g} in, unusually large.  "
+            f"If D.txt is in millimetres, use --diam-unit mm."
+        )
+    if system == "US" and diam_unit == "in" and d_min > 100:
+        return (
+            f"D.txt values are {d_min:g}–{d_max:g} in, unusually large "
+            f"for a US network.  If D.txt is in millimetres, use "
+            f"--diam-unit mm."
+        )
+    if system == "US" and diam_unit == "mm" and d_max < 50:
+        return (
+            f"D.txt values are {d_min:g}–{d_max:g} mm, unusually small "
+            f"for a US network.  If D.txt is in inches, use "
+            f"--diam-unit in  (→ {d_min * 25.4:.1f}–{d_max * 25.4:.1f} mm)."
+        )
+    return None
 
 def _constraints_from_args(args, units: dict) -> dict:
     """Build the SI constraint dict from CLI args + detected units."""
@@ -215,8 +286,20 @@ def _constraints_from_args(args, units: dict) -> dict:
     }
 
 
-def _build_request_from_args(args) -> OptimizationRequest:
+def _build_request_from_args(
+    args, *, warn: bool = True,
+) -> OptimizationRequest:
     units = _detect_display_units(args.inp)
+
+    if warn:
+        d_values = _read_diameter_values(args.d)
+        w = _sanity_check_diam_unit(units, d_values, args.diam_unit)
+        if w:
+            print(f"Warning: {w}", file=sys.stderr)
+            print("  Continuing — press Ctrl+C within 3 s to abort.",
+                  file=sys.stderr, flush=True)
+            time.sleep(3)
+
     constraints = _constraints_from_args(args, units)
     return OptimizationRequest(
         inp_path=args.inp,
@@ -367,13 +450,15 @@ def cmd_validate(args) -> int:
     print(f"  Diameter file: {args.d}  (unit: {args.diam_unit})")
     print(f"  Cost file:     {args.cost}")
 
-    try:
-        d_lines = [l.strip()
-                   for l in Path(args.d).read_text().splitlines()
-                   if l.strip()]
-        print(f"  Diameter options: {len(d_lines)}")
-    except Exception as e:
-        print(f"  Warning: cannot read D.txt: {e}", file=sys.stderr)
+    d_values = _read_diameter_values(args.d)
+    if d_values:
+        d_min, d_max = min(d_values), max(d_values)
+        print(f"  Diameter options: {len(d_values)}  "
+              f"(values {d_min:g}–{d_max:g} {args.diam_unit})")
+    else:
+        print(f"  Diameter options: 0 (file empty or unreadable)")
+        print(f"  Warning: D.txt has no numeric values; "
+              f"did you mean a different file?", file=sys.stderr)
 
     try:
         c_lines = [l.strip()
@@ -382,6 +467,14 @@ def cmd_validate(args) -> int:
         print(f"  Cost entries:     {len(c_lines)}")
     except Exception as e:
         print(f"  Warning: cannot read Cost.txt: {e}", file=sys.stderr)
+
+    # Sanity check: does --diam-unit match the actual values?
+    warning = _sanity_check_diam_unit(units, d_values, args.diam_unit)
+    if warning:
+        print(f"\n  ⚠  {warning}")
+        print(f"  (validate still reports OK; re-run with the suggested "
+              f"flag to proceed.)")
+        return EXIT_OK
 
     print("\nAll checks passed.")
     return EXIT_OK
@@ -570,9 +663,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--d", required=True,
                        help="Diameter-options file.")
     p_run.add_argument("--cost", required=True, help="Unit-cost file.")
-    p_run.add_argument("--diam-unit", choices=["mm", "in"], default="mm",
-                       help="Unit of values in the diameter file "
-                            "(default mm).")
+    p_run.add_argument(
+        "--diam-unit", choices=["mm", "in"], default="mm",
+        help="Unit of the values in the diameter file (default mm). "
+             "If unsure, run `wds-optimize validate` first — it "
+             "warns when the values look inconsistent with the "
+             "network's units.",
+    )
     _add_common_algo_args(p_run)
     _add_constraint_args(p_run)
     _add_output_args(p_run)
