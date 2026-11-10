@@ -39,7 +39,7 @@ import streamlit as st
 import wntr
 
 from wds_optimizer.algorithms.config import build_algorithm_config
-from wds_optimizer.data.loaders import load_optimization_data
+from wds_optimizer.api import _parse_network, build_problem
 from wds_optimizer.experiments.runner import (
     ExperimentResult,
     run_experiment,
@@ -52,7 +52,6 @@ from wds_optimizer.hydraulics.units import (
     velocity_from_si, velocity_to_si,
     diameter_to_display,
 )
-from wds_optimizer.optimization.problem import build_optimization_problem
 from wds_optimizer.app.network_map import build_network_figure
 from wds_optimizer.app.state import init_state, reset_experiment
 from wds_optimizer.app.uploads import read_uploaded
@@ -84,11 +83,15 @@ st.set_page_config(
 def _load_network_cached(inp_path: str):
     """Parse and cache the WNTR network model by path.
 
-    This is the *pristine* parse.  Callers should use ``_load_network``
-    (below), never this function directly, so that each experiment gets
-    its own mutable copy.
+    Delegates the parse to ``api._parse_network`` so there is one place
+    that knows how to read an .inp.  The cache itself stays here because
+    ``@st.cache_resource`` is Streamlit-specific — the API must not
+    depend on Streamlit.
+
+    Callers should use ``_load_network`` (below), never this function
+    directly, so that each experiment gets its own mutable copy.
     """
-    return wntr.network.WaterNetworkModel(inp_path)
+    return _parse_network(inp_path)
 
 
 def _load_network(inp_path: str):
@@ -773,46 +776,28 @@ def _sweep_param_label(key: str, units: dict | None = None) -> str:
 # =====================================================================
 
 def _prepare_problem():
-    wn = _load_network(st.session_state.inp_path)
-    units = detect_network_units(wn)
+    """GUI wrapper around ``api.build_problem``.
 
-    Din, Cost, D_m = load_optimization_data(
-        st.session_state.d_path,
-        st.session_state.cost_path,
-        diam_file_unit=st.session_state.diam_unit,
-    )
+    Two responsibilities remain here that do not belong in the API:
 
-    pipe_names = list(wn.pipe_name_list)
-    junction_names = list(wn.junction_name_list)
-    lengths = np.array([wn.get_link(n).length for n in pipe_names])
-    initial_D = np.array([wn.get_link(n).diameter for n in pipe_names])
+    1. **Display-unit → SI conversion.**  The user enters Pmin/Pmax/Vmin/
+       Vmax in the network's native units (psi, m, ft/s, ...).  The API
+       consumes SI only.  This conversion is GUI-side by design — the
+       API never sees display units.
 
-    # Parse fixed pipes
-    fixed_str = (st.session_state.get("fixed_pipes", "") or "").strip()
-    if fixed_str:
-        try:
-            fixed_1based = [
-                int(x.strip()) for x in fixed_str.split(",") if x.strip()
-            ]
-        except ValueError:
-            raise ValueError(
-                "Fixed pipe IDs must be integers separated by commas."
-            )
-        if any(f < 1 or f > len(pipe_names) for f in fixed_1based):
-            raise ValueError(
-                f"Fixed pipe IDs must be between 1 and {len(pipe_names)}."
-            )
-        if len(set(fixed_1based)) != len(fixed_1based):
-            raise ValueError("Fixed pipe IDs must be unique.")
-        fixed_0based = [f - 1 for f in sorted(fixed_1based)]
-    else:
-        fixed_0based = []
+    2. **User-friendly validation errors.**  The API validates in SI
+       for the safety of CLI/embedded callers; the GUI re-validates in
+       display units so error messages show the numbers the user typed
+       (e.g. ``Pmin (30.0)`` not ``Pmin (2.11)`` for a psi network).
+       GUI-side validation is checked first; the API's is a safety net.
+    """
+    units = st.session_state.network_units
+    if units is None:
+        raise ValueError(
+            "Network units not detected — load an .inp file first."
+        )
 
-    variable_0based = [
-        i for i in range(len(pipe_names)) if i not in fixed_0based
-    ]
-
-    # Build the constraint dict; convert display units -> SI.
+    # Display units → SI
     constraints = {
         "Pmin": {"enabled": bool(st.session_state.use_pmin),
                  "value": pressure_to_si(st.session_state.pmin, units)},
@@ -824,32 +809,30 @@ def _prepare_problem():
                  "value": velocity_to_si(st.session_state.vmax, units)},
     }
 
+    # User-friendly validation, display units (API re-checks in SI)
     if not any(c["enabled"] for c in constraints.values()):
         raise ValueError("Enable at least one constraint before running.")
-    if (constraints["Pmin"]["enabled"] and constraints["Pmax"]["enabled"]
-            and constraints["Pmin"]["value"] >= constraints["Pmax"]["value"]):
+    if (st.session_state.use_pmin and st.session_state.use_pmax
+            and st.session_state.pmin >= st.session_state.pmax):
         raise ValueError(
             f"Pmin ({st.session_state.pmin}) must be smaller than "
             f"Pmax ({st.session_state.pmax})."
         )
-    if (constraints["Vmin"]["enabled"] and constraints["Vmax"]["enabled"]
-            and constraints["Vmin"]["value"] >= constraints["Vmax"]["value"]):
+    if (st.session_state.use_vmin and st.session_state.use_vmax
+            and st.session_state.vmin >= st.session_state.vmax):
         raise ValueError(
             f"Vmin ({st.session_state.vmin}) must be smaller than "
             f"Vmax ({st.session_state.vmax})."
         )
 
-    problem = build_optimization_problem(
-        wn=wn, Din=Din, Cost=Cost, D_m=D_m,
-        full_lengths=lengths, initial_D=initial_D,
-        fixed_pipes=fixed_0based,
-        variable_pipes=variable_0based,
+    return build_problem(
+        inp_path=st.session_state.inp_path,
+        d_path=st.session_state.d_path,
+        cost_path=st.session_state.cost_path,
+        diam_unit=st.session_state.diam_unit,
         constraints=constraints,
-        pipe_names=pipe_names,
-        junction_names=junction_names,
-        units=units,
+        fixed_pipes=st.session_state.get("fixed_pipes", ""),
     )
-    return problem, units, wn
 
 
 # =====================================================================
