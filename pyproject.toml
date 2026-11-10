@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wds-optimizer"
-version = "0.5.0"                          # ← از 0.1.0 → 0.5.0
+version = "0.1.0"
 description = "Water distribution network optimization with WNTR (Python port)"
 requires-python = ">=3.11,<3.14"           # ← 3.10 → 3.11 (numpy 2.x نیاز دارد)
 
@@ -25,7 +25,7 @@ dev = [
 ]
 
 [project.scripts]
-wds-optimizer = "wds_optimizer.app.run:main"
+wds-optimize = "wds_optimizer.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
