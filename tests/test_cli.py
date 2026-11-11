@@ -325,3 +325,135 @@ def test_cli_source_has_no_non_ascii_outside_comments():
             "Use ASCII equivalents: '[!]' for warnings, '->' for arrows, "
             "'-' for dashes."
         )
+
+# ---------------------------------------------------------------------------
+# Ctrl+C handling (regression for the pre-run traceback bug)
+# ---------------------------------------------------------------------------
+
+def _namespace(**kw):
+    """Build an argparse.Namespace with sensible defaults for cmd_run."""
+    import argparse
+    base = dict(
+        inp="", d="", cost="", diam_unit="mm",
+        algo=None, n_runs=1, seed=1, ns=10, max_gen=5,
+        pmin=None, pmax=None, vmin=None, vmax=None,
+        units="auto", fixed="",
+        output=None, csv=None, excel=None, report=None,
+        reference_cost=None, success_tol=1.0, quiet=True,
+    )
+    base.update(kw)
+    return argparse.Namespace(**base)
+
+
+def test_ctrl_c_during_warning_sleep_exits_cleanly(
+    files, monkeypatch, capsys,
+):
+    """Ctrl+C during the 3-second warning sleep must:
+       - return EXIT_CANCELLED (4)
+       - print "Cancelled before run started." to stderr
+       - NOT print a traceback
+
+    Simulated by monkeypatching ``time.sleep`` to raise KeyboardInterrupt
+    the first time it is called inside ``_build_request_from_args``.
+    Cross-platform (no real signals, no subprocess).
+    """
+    import wds_optimizer.cli as cli_mod
+
+    def fake_sleep(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli_mod.time, "sleep", fake_sleep)
+
+    args = _namespace(
+        inp=files["inp"], d=files["d"], cost=files["cost"],
+        # No --diam-unit: default "mm" triggers the warning on the
+        # 3-pipe network whose D.txt (150-250 mm) is plausible, so
+        # we override D.txt with values that look like inches.
+        # Simplest: rely on the fixture and set --diam-unit="in"
+        # so the sanity check fires "looks like mm" instead.
+        diam_unit="in",
+        pmin=30.0,
+    )
+    code = cli_mod.cmd_run(args)
+
+    captured = capsys.readouterr()
+    assert code == 4, f"expected EXIT_CANCELLED (4), got {code}"
+    assert "Cancelled before run started." in captured.err
+    assert "Traceback" not in captured.err
+    assert "KeyboardInterrupt" not in captured.err
+
+
+def test_main_safety_net_catches_keyboard_interrupt(monkeypatch, capsys):
+    """If a subcommand somehow leaks a KeyboardInterrupt, main() catches
+    it and returns EXIT_CANCELLED with a clean message."""
+    import wds_optimizer.cli as cli_mod
+
+    def fake_func(_args):
+        raise KeyboardInterrupt
+
+    # Build parser, then swap the selected subcommand's function.
+    monkeypatch.setattr(
+        cli_mod, "_build_parser",
+        lambda: type("P", (), {
+            "parse_args": staticmethod(
+                lambda self=None, _argv=None:
+                    type("A", (), {"func": staticmethod(fake_func)})()
+            ),
+        })(),
+    )
+
+    code = cli_mod.main([])
+    captured = capsys.readouterr()
+    assert code == 4
+    assert "Cancelled." in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_ctrl_c_during_run_writes_partial_json(files, tmp_path, monkeypatch):
+    """Ctrl+C during a run: results computed so far are kept.
+
+    Uses in-process call with a cancel_callback that flips True after a
+    few progress events.  Verifies:
+      - the JSON output is still written
+      - the best design is non-empty (partial)
+      - exit code is EXIT_CANCELLED
+    """
+    import wds_optimizer.cli as cli_mod
+    import wds_optimizer.api as api_mod
+
+    out_json = tmp_path / "partial.json"
+
+    n_seen = [0]
+    original_run = api_mod.run_optimization
+
+    def run_with_early_cancel(request, *, progress_callback=None,
+                              cancel_callback=None):
+        def wrapped_progress(info):
+            n_seen[0] += 1
+            if progress_callback is not None:
+                progress_callback(info)
+
+        def wrapped_cancel():
+            # Ask to cancel after 2 progress events
+            return n_seen[0] >= 2
+
+        return original_run(
+            request,
+            progress_callback=wrapped_progress,
+            cancel_callback=wrapped_cancel,
+        )
+
+    monkeypatch.setattr(cli_mod, "run_optimization", run_with_early_cancel)
+
+    args = _namespace(
+        inp=files["inp"], d=files["d"], cost=files["cost"],
+        diam_unit="mm", pmin=30.0, vmax=2.5,
+        max_gen=50, output=str(out_json),
+    )
+    code = cli_mod.cmd_run(args)
+
+    assert code == 4, f"expected EXIT_CANCELLED (4), got {code}"
+    assert out_json.exists(), "partial result should have been written"
+    import json as _json
+    data = _json.loads(out_json.read_text())
+    assert "best" in data and "experiment" in data

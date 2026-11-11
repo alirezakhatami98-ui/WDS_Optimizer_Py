@@ -368,6 +368,14 @@ def cmd_run(args) -> int:
     try:
         request = _build_request_from_args(args)
         request.validate()
+    except KeyboardInterrupt:
+        # Happens when Ctrl+C is pressed during the 3-second warning
+        # sleep (or during the brief network load before it).  No
+        # SIGINT handler is installed yet, so the default behaviour
+        # raises KeyboardInterrupt; catch it cleanly instead of letting
+        # the traceback escape (see the crash report in the changelog).
+        print("\nCancelled before run started.", file=sys.stderr)
+        return EXIT_CANCELLED
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_INVALID_INPUT
@@ -719,6 +727,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return args.func(args)
     except SystemExit as e:
         return int(e.code) if e.code is not None else EXIT_OK
+    except KeyboardInterrupt:
+        # Safety net: any code path that does not catch Ctrl+C itself
+        # (e.g. a future subcommand) still exits cleanly with code 4
+        # instead of dumping a traceback.
+        print("\nCancelled.", file=sys.stderr)
+        return EXIT_CANCELLED
     except Exception as e:
         print(f"Unexpected error: {type(e).__name__}: {e}",
               file=sys.stderr)
