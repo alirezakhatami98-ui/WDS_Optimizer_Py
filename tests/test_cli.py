@@ -286,7 +286,8 @@ def test_run_warns_on_suspicious_diam_unit(files, tmp_path):
 # CLI output must remain ASCII (Windows portability guard)
 # ---------------------------------------------------------------------------
 
-def test_cli_source_has_no_non_ascii_outside_comments():
+@pytest.mark.parametrize("filename", ["cli.py", "api.py"])
+def test_source_has_no_non_ascii_outside_comments(filename):
     """Guard against UnicodeEncodeError on Windows.
 
     Windows consoles with cp1252 / cp1256 codepages raise
@@ -295,19 +296,19 @@ def test_cli_source_has_no_non_ascii_outside_comments():
     invoked by ``subprocess.run(capture_output=True)``, piped to a
     file, or run in CI).
 
-    This test strips ``#`` comments and fails if any non-ASCII bytes
-    remain in ``cli.py``'s source.  Docstrings are also caught — if a
-    contributor ever needs non-ASCII prose in a docstring, they should
-    move it to a comment.
+    ``cli.py`` prints directly.  ``api.py`` docstrings can leak into
+    ``help()`` output and tracebacks, both of which go to stdout or
+    stderr, so it is guarded too.
+
+    The test strips ``#`` comments and fails if any non-ASCII bytes
+    remain.  Docstrings are caught — if you need non-ASCII prose in a
+    docstring, move it to a comment.
     """
-    import re as _re
     src_path = (
         Path(__file__).resolve().parent.parent
-        / "src" / "wds_optimizer" / "cli.py"
+        / "src" / "wds_optimizer" / filename
     )
     text = src_path.read_text(encoding="utf-8")
-    # Strip line comments.  (Docstrings are left in — a bit conservative,
-    # but the CLI currently has no non-ASCII docstrings, so it stays true.)
     no_comments = "\n".join(
         line.split("#", 1)[0] for line in text.splitlines()
     )
@@ -318,9 +319,10 @@ def test_cli_source_has_no_non_ascii_outside_comments():
     })
     if leaked:
         pytest.fail(
-            "cli.py contains non-ASCII characters that may reach "
-            "stdout/stderr via print().  Windows consoles with non-UTF-8 "
-            "codepages raise UnicodeEncodeError on these characters.\n"
+            f"{filename} contains non-ASCII characters that may reach "
+            "stdout/stderr via print() or help().  Windows consoles "
+            "with non-UTF-8 codepages raise UnicodeEncodeError on "
+            "these characters.\n"
             f"Found: {leaked}\n"
             "Use ASCII equivalents: '[!]' for warnings, '->' for arrows, "
             "'-' for dashes."

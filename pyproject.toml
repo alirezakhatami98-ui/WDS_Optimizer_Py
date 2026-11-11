@@ -5,27 +5,98 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "wds-optimizer"
 version = "0.1.0"
-description = "Water distribution network optimization with WNTR (Python port)"
-requires-python = ">=3.11,<3.14"           # ← 3.10 → 3.11 (numpy 2.x نیاز دارد)
+description = "Water distribution network design optimization with WNTR"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { file = "LICENSE" }
+authors = [
+    # TODO: fill in your name and email before publishing to PyPI.
+    { name = "TODO", email = "TODO@example.com" },
+]
+keywords = [
+    "water distribution",
+    "optimization",
+    "WNTR",
+    "EPANET",
+    "genetic algorithm",
+    "differential evolution",
+    "SADE",
+    "hydraulics",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Hydrology",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
 
+# Base dependencies: enough for the CLI and the programmatic API.
+# `pip install wds-optimizer` yields a headless install that works on a
+# server, in CI, and in a research notebook.
 dependencies = [
     "wntr>=1.5.0,<2.0",
     "numpy>=2.2.6,<3.0",
-    "pandas>=2.0,<3.0",                    # ← سقف از 2.3 → 3.0
+    "pandas>=2.0,<3.0",
     "openpyxl>=3.1",
-    "plotly>=5.18",
-    "streamlit>=1.30",
-    "six>=1.16",                           # ← نگه دارید (بی‌ضرر است)
+    "six>=1.16",
 ]
 
 [project.optional-dependencies]
+# CLI extras: progress bar only.  The CLI itself is part of the base
+# install; this just makes the progress display nicer.  Headless use
+# works fine without it.
+cli = ["tqdm>=4.66"]
+
+# Report extras: static PNG figures in REPORT.zip.  Only needed if you
+# plan to call `result.to_report_zip()` or `wds-optimize run --report ...`.
+report = ["matplotlib>=3.7,<4.0"]
+
+# GUI extras: the full Streamlit stack.  The API and CLI never import
+# these, so a headless deployment does not need them.
+gui = [
+    "streamlit>=1.30",
+    "plotly>=5.18",
+]
+
+# Everything you need to run the test suite.
 dev = [
     "pytest>=7.4",
+    "tqdm>=4.66",
     "matplotlib>=3.7,<4.0",
+    "streamlit>=1.30",
+    "plotly>=5.18",
+]
+
+# Convenience: install everything except the test tools.
+# `pip install wds-optimizer[all]` is the "give me all features" button.
+all = [
+    "tqdm>=4.66",
+    "matplotlib>=3.7,<4.0",
+    "streamlit>=1.30",
+    "plotly>=5.18",
 ]
 
 [project.scripts]
 wds-optimize = "wds_optimizer.cli:main"
 
+[project.urls]
+# TODO: replace with your actual repository URL before publishing.
+Homepage = "https://github.com/alirezakhatami98-ui/WDS_Optimizer_Py"
+Repository = "https://github.com/alirezakhatami98-ui/WDS_Optimizer_Py"
+Issues = "https://github.com/alirezakhatami98-ui/WDS_Optimizer_Py/issues"
+Changelog = "https://github.com/alirezakhatami98-ui/WDS_Optimizer_Py/blob/main/CHANGELOG.md"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

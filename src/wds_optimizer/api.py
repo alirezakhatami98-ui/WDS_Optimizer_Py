@@ -1,4 +1,4 @@
-"""Programmatic API for WDS Optimizer — the non-GUI entry point.
+"""Programmatic API for WDS Optimizer - the non-GUI entry point.
 
 This module is the single source of truth for "given input files, build
 the optimization problem and run it".  It is imported by:
@@ -15,8 +15,8 @@ v0.1.0 public surface
 ---------------------
 - ``load_network_isolated(inp_path)``
 - ``build_problem(inp_path=..., d_path=..., cost_path=..., ...)``
-- ``OptimizationRequest`` — dataclass describing one run
-- ``OptimizationResult`` — dataclass holding results + export methods
+- ``OptimizationRequest`` - dataclass describing one run
+- ``OptimizationResult`` - dataclass holding results + export methods
 - ``run_optimization(request, *, progress_callback, cancel_callback)``
 
 Everything else in this module is private (leading underscore).
@@ -53,7 +53,11 @@ from wds_optimizer.hydraulics.simulation import run_hydraulic_simulation
 from wds_optimizer.hydraulics.units import detect_network_units
 from wds_optimizer.optimization.problem import build_optimization_problem
 from wds_optimizer.persistence.snapshot import build_snapshot
-from wds_optimizer.reporting.report import build_report_zip
+# NOTE: build_report_zip is imported lazily inside to_report_zip().
+# It pulls in matplotlib (via reporting.figures), which is an optional
+# dependency (`pip install wds-optimizer[report]`).  Importing it at
+# module level would force matplotlib on every CLI/API user, including
+# headless-server deployments that never generate a report.
 
 
 # =====================================================================
@@ -61,7 +65,7 @@ from wds_optimizer.reporting.report import build_report_zip
 # =====================================================================
 
 def _parse_network(inp_path: str | Path) -> wntr.network.WaterNetworkModel:
-    """Raw parse — no copy, no cache.  Private (see commit 1 docstring)."""
+    """Raw parse - no copy, no cache.  Private (see commit 1 docstring)."""
     return wntr.network.WaterNetworkModel(str(inp_path))
 
 
@@ -483,7 +487,22 @@ class OptimizationResult:
         success_tol_pct: float = 1.0,
         include_inputs: bool = True,
     ) -> bytes:
-        """Full reproducibility report (REPORT.md + figures + data)."""
+        """Full reproducibility report (REPORT.md + figures + data).
+
+        Raises
+        ------
+        ImportError
+            If matplotlib is not installed.  Report generation embeds
+            static PNG figures, which require the ``[report]`` extra:
+            ``pip install wds-optimizer[report]``.
+        """
+        try:
+            from wds_optimizer.reporting.report import build_report_zip
+        except ImportError as e:
+            raise ImportError(
+                "Report generation requires matplotlib. "
+                "Install it with:  pip install wds-optimizer[report]"
+            ) from e
         return build_report_zip(
             inp_path=self.request.inp_path,
             d_path=self.request.d_path,
@@ -508,7 +527,7 @@ class OptimizationResult:
 # =====================================================================
 
 def _build_algorithm_config(request: OptimizationRequest) -> AlgorithmConfig:
-    """Convert OptimizationRequest → AlgorithmConfig (with defaults)."""
+    """Convert OptimizationRequest -> AlgorithmConfig (with defaults)."""
     cfg = build_algorithm_config(
         NS=int(request.ns), MaxGen=int(request.max_gen)
     )
