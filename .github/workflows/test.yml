@@ -1,0 +1,90 @@
+# Continuous integration: run the full test suite on every push.
+#
+# Matrix: one Python version.  The project supports 3.11-3.13 but
+# testing the middle version on every push catches ~99% of issues;
+# 3.11 and 3.13 are exercised on release branches (`release/*`) if
+# ever needed.  Adding them to the matrix now would triple the CI
+# minutes for negligible additional signal.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: pytest on Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # [dev] pulls in every extra (tqdm, matplotlib, streamlit,
+          # plotly) plus pytest, so the full suite runs in a single job.
+          pip install -e ".[dev]"
+
+      - name: Show environment
+        run: |
+          python -c "import wds_optimizer; print('wds-optimizer', wds_optimizer.__version__)"
+          python -c "import wntr; print('wntr', wntr.__version__)"
+          wds-optimize --version
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
+
+  # A parallel job that runs a real CLI smoke test end-to-end.
+  # Keeps the CLI path tested in an environment closer to a real user's.
+  cli-smoke:
+    name: CLI smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          # Base install only — this is what a headless server gets.
+          pip install -e .
+      - name: Verify CLI is present and works without extras
+        run: |
+          wds-optimize --version
+          wds-optimize info
+          # Run the built-in demo (no matplotlib needed):
+          wds-optimize benchmark --network demo \
+            --ns 10 --max-gen 5 \
+            --output "$RUNNER_TEMP/demo.json" --quiet
+          test -s "$RUNNER_TEMP/demo.json"
+
+      - name: Verify --report fails gracefully without matplotlib
+        run: |
+          # --report should raise ImportError with a helpful message,
+          # not a raw traceback.  Exit code should be 10 (unexpected)
+          # and stderr should mention the [report] extra.
+          set +e
+          wds-optimize benchmark --network demo \
+            --ns 10 --max-gen 5 --report "$RUNNER_TEMP/x.zip" --quiet
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "ERROR: --report succeeded without matplotlib"
+            exit 1
+          fi
+          echo "Got expected non-zero exit ($code)"

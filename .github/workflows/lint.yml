@@ -1,0 +1,45 @@
+# Lint: catch non-ASCII leaks and obvious style issues before they
+# reach a commit.  The non-ASCII check is critical because
+# UnicodeEncodeError on Windows is a class of bug we have already hit
+# (see CHANGELOG v0.1.0).
+
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  non-ascii:
+    name: ASCII guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject non-ASCII outside comments
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          bad = []
+          for path in Path("src").rglob("*.py"):
+              text = path.read_text(encoding="utf-8")
+              no_comments = "\n".join(
+                  line.split("#", 1)[0] for line in text.splitlines()
+              )
+              for i, ch in enumerate(no_comments):
+                  if ord(ch) > 127:
+                      line_no = no_comments.count("\n", 0, i) + 1
+                      bad.append(
+                          f"{path}:{line_no}: non-ASCII {ch!r} "
+                          f"(U+{ord(ch):04X})"
+                      )
+          if bad:
+              print("Non-ASCII characters found (Windows "
+                    "UnicodeEncodeError hazard):")
+              for line in bad:
+                  print("  " + line)
+              sys.exit(1)
+          print("OK - no non-ASCII outside comments")
+          PY
