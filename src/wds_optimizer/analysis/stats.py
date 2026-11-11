@@ -486,7 +486,7 @@ def tests_dataframe(pairs: list, formatted=True) -> pd.DataFrame:
                 "A12 (P x<y)": _fmt(r["a12"], ".2f"),
                 "Cliff's δ": _fmt(r["cliffs_delta"], "+.2f"),
                 "Effect": r["magnitude"] or "—",
-                "Median diff (y−x) [95% CI]": (
+                "Median diff (y-x) [95% CI]": (
                     f"{fmt_cost(r['median_diff'])} "
                     f"[{fmt_cost(r['diff_ci_low'])}, "
                     f"{fmt_cost(r['diff_ci_high'])}]"),
