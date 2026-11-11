@@ -457,3 +457,5 @@ def test_ctrl_c_during_run_writes_partial_json(files, tmp_path, monkeypatch):
     import json as _json
     data = _json.loads(out_json.read_text())
     assert "best" in data and "experiment" in data
+    # Experiment should be marked cancelled in the snapshot
+    assert data["experiment"]["cancelled"] is True
