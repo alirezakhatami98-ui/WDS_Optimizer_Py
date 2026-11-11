@@ -437,9 +437,9 @@ def cmd_run(args) -> int:
         print(f"Wrote {args.report}")
 
     # Cancellation is signalled in two ways:
-    # 1. cancel_flag.cancelled — set by our SIGINT handler, the usual
+    # 1. cancel_flag.cancelled - set by our SIGINT handler, the usual
     #    case when a user presses Ctrl+C in a terminal.
-    # 2. result.experiment.cancelled — set by run_experiment when any
+    # 2. result.experiment.cancelled - set by run_experiment when any
     #    run ended with status Partial / Cancelled / NotStarted.
     #    A non-CLI caller of run_optimization (embedded API use,
     #    programmatic cancellation from a script, or a future
