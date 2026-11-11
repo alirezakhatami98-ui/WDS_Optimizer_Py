@@ -1,15 +1,15 @@
 """Command-line interface for WDS Optimizer.
 
 Entry point: ``wds-optimize`` (installed via ``[project.scripts]``).
-Also runnable as ``python -m wds_optimizer.cli`` — useful for CI and
+Also runnable as ``python -m wds_optimizer.cli`` - useful for CI and
 for testing without installing the console script.
 
 Subcommands
 -----------
-- ``run``       — run an optimisation on user-supplied files
-- ``validate``  — check input files without running
-- ``info``      — print environment metadata (versions, optional deps)
-- ``benchmark`` — run on a built-in benchmark network
+- ``run``       - run an optimisation on user-supplied files
+- ``validate``  - check input files without running
+- ``info``      - print environment metadata (versions, optional deps)
+- ``benchmark`` - run on a built-in benchmark network
 
 Exit codes
 ----------
@@ -207,13 +207,13 @@ def _sanity_check_diam_unit(
     """Warn if D.txt values look inconsistent with ``diam_unit`` and
     the network's native unit system.
 
-    Heuristic — never fails the run, only returns a warning string
+    Heuristic - never fails the run, only returns a warning string
     (or None if the values look plausible).
 
     Typical ranges for water distribution pipes:
 
-    - SI networks (LPS/LPM/MLD): 100 – 2000 mm  (= 4 – 80 in)
-    - US networks (GPM/CFS):      4 – 80 in     (= 100 – 2000 mm)
+    - SI networks (LPS/LPM/MLD): 100 - 2000 mm  (= 4 - 80 in)
+    - US networks (GPM/CFS):      4 - 80 in     (= 100 - 2000 mm)
 
     So ``max(values) < 50`` almost always means the file is in inches
     being read as mm, and ``min(values) > 100`` almost always means
@@ -301,7 +301,7 @@ def _build_request_from_args(
         w = _sanity_check_diam_unit(units, d_values, args.diam_unit)
         if w:
             print(f"Warning: {w}", file=sys.stderr)
-            # "press Ctrl+C..." is ASCII — including the em dash would
+            # "press Ctrl+C..." is ASCII - including the em dash would
             # trip UnicodeEncodeError on Windows.
             print("  Continuing - press Ctrl+C within 3 s to abort.",
                   file=sys.stderr, flush=True)
@@ -343,8 +343,10 @@ def _print_summary(result: OptimizationResult) -> None:
     for algo, s in summary.items():
         n_ok = max(1, s["n_success"])
         feas_pct = 100 * s["n_feasible"] / n_ok
-        best = f"{s['best']:,.0f}" if np.isfinite(s["best"]) else "—"
-        mean = f"{s['mean']:,.0f}" if np.isfinite(s["mean"]) else "—"
+        # ASCII-only placeholder: em dash would crash on Windows
+        # consoles with cp1252/cp1256 when this line is printed.
+        best = f"{s['best']:,.0f}" if np.isfinite(s["best"]) else "-"
+        mean = f"{s['mean']:,.0f}" if np.isfinite(s["mean"]) else "-"
         print(f"    {algo:6s}  feasible={feas_pct:3.0f}%  "
               f"best={best:>14s}  mean={mean:>14s}")
     print()
@@ -674,7 +676,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_run.add_argument(
         "--diam-unit", choices=["mm", "in"], default="mm",
         help="Unit of the values in the diameter file (default mm). "
-             "If unsure, run `wds-optimize validate` first — it "
+             "If unsure, run `wds-optimize validate` first - it "
              "warns when the values look inconsistent with the "
              "network's units.",
     )
