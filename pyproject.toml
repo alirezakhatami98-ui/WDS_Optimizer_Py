@@ -101,9 +101,8 @@ where = ["src"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 markers = [
-    "slow: slow benchmark verification tests (~10-15 min). "
-    "Run explicitly with `pytest -m slow`; skipped by default.",
+    "slow: slow benchmark verification tests (~10-15 min). Run explicitly with 'pytest -m slow'; skipped by default.",
 ]
-# Skip slow tests by default — CI runs the fast suite on every push.
-# Run the full benchmark verification manually with `pytest -m slow`.
-addopts = "-m 'not slow'"
+# Skip slow tests by default so CI stays under 5 min.  Run the full
+# benchmark verification with:  pytest -m slow
+addopts = '-m "not slow"'
