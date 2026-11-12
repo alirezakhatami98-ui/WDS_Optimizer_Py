@@ -9,11 +9,9 @@ citing the paper(s) that introduced the problem.
 
 ## Available benchmarks
 
-| Network | Pipes | Junctions | Best-known cost | Reference |
-|---------|-------|-----------|-----------------|-----------|
-| `hanoi` | 34 | 32 | $6.081M | Fujiwara & Khang 1990 |
-| `nytp`  | 21 | 16 | $38.64M | Dandy et al. 1996 |
-| `anytown` | 37 | 19 | (varies) | Walski et al. 1987 |
+| Network | Pipes | Junctions | Best-known | Constraints | Reference |
+|---------|-------|-----------|------------|-------------|-----------|
+| `hanoi` | 34 | 32 | $6.081M | Pmin=30 m only | Fujiwara & Khang 1990 |
 
 Additional networks (Balerma, Fossolo, Pescara) may be added later.
 

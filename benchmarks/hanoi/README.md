@@ -62,15 +62,25 @@ SADE, ACO) converge on $6.081M within a few thousand evaluations.
 
 ## Constraint values
 
-- **Pmin = 30 m** at every junction.
-- **Vmax = 2.5 m/s** in every pipe (often disabled; the cheapest
-  feasible solutions rarely violate it).
-- **Pmax, Vmin** disabled.
+- **Pmin = 30 m** at every junction.  **This is the only constraint
+  used by the standard Hanoi benchmark.**
+- **Pmax, Vmin, Vmax are all disabled.**
 
-The optimal design is always feasible under these constraints; a
-run that reports "no feasible design" is a bug, not a tight network.
+### Why Hanoi has no velocity constraint
 
-## Reproduction
+This is a distinctive feature of the Hanoi benchmark that is often
+missed.  The total demand is ≈ 5540 L/s.  The first pipe (from the
+reservoir) carries the entire demand.  Even with the largest
+available diameter (1016 mm), the velocity in pipe 1 is ≈ 6.8 m/s.
+Any Vmax below this value makes the problem infeasible by
+construction — no pipe size in D.txt can satisfy it.
+
+All reference papers (Fujiwara & Khang 1990; Simpson et al. 1994;
+Suribabu 2010; Zheng et al. 2013) therefore optimize Hanoi with
+**Pmin only**.  A run that disables velocity is not a weaker test —
+it is the correct test.
+
+### Reproduction
 
 ```bash
 wds-optimize run \
@@ -79,11 +89,12 @@ wds-optimize run \
     --cost benchmarks/hanoi/Cost.txt \
     --diam-unit in \
     --algo SADE --ns 200 --max-gen 500 --seed 1 \
-    --pmin 30 --vmax 2.5 \
+    --pmin 30 \
     --output hanoi_sade.json
 ```
 
-Expected: feasible design, cost ≤ $6.10 million.
+Expected: feasible design, cost ≤ $6.10 million. Do not pass
+--vmax — it will make the run infeasible regardless of algorithm.
 
 Via the Python API:
 
@@ -100,7 +111,7 @@ result = run_optimization(OptimizationRequest(
         "Pmin": {"enabled": True,  "value": 30.0},
         "Pmax": {"enabled": False, "value": 100.0},
         "Vmin": {"enabled": False, "value": 0.0},
-        "Vmax": {"enabled": True,  "value": 2.5},
+        "Vmax": {"enabled": False,  "value": 2.5},
     },
 ))
 print(f"{result.best_score:,.0f}  feasible={result.best_feasible}")
