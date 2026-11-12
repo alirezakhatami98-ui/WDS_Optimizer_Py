@@ -73,18 +73,26 @@ jobs:
             --output "$RUNNER_TEMP/demo.json" --quiet
           test -s "$RUNNER_TEMP/demo.json"
 
-      - name: Verify --report fails gracefully without matplotlib
+      - name: Verify --report produces a valid ZIP
+        # Note: matplotlib ships transitively via wntr (a hard
+        # dependency), so --report always works in a base install.
+        # The lazy import in api.py is kept for import-time savings
+        # and for a hypothetical future headless build, but the
+        # ImportError path is unreachable today.  This step verifies
+        # the happy path.
         run: |
-          # --report should raise ImportError with a helpful message,
-          # not a raw traceback.  Exit code should be 10 (unexpected)
-          # and stderr should mention the [report] extra.
-          set +e
           wds-optimize benchmark --network demo \
             --ns 10 --max-gen 5 --report "$RUNNER_TEMP/x.zip" --quiet
-          code=$?
-          set -e
-          if [ "$code" -eq 0 ]; then
-            echo "ERROR: --report succeeded without matplotlib"
-            exit 1
-          fi
-          echo "Got expected non-zero exit ($code)"
+          test -s "$RUNNER_TEMP/x.zip"
+          python - <<'PY'
+          import zipfile
+          zf = zipfile.ZipFile("$RUNNER_TEMP/x.zip".replace('$RUNNER_TEMP',
+                                                              __import__('os').environ['RUNNER_TEMP']))
+          # Alternatively, use os.environ:
+          import os
+          zf = zipfile.ZipFile(os.path.join(os.environ['RUNNER_TEMP'], 'x.zip'))
+          names = zf.namelist()
+          assert "REPORT.md" in names, names
+          assert "experiment.json" in names, names
+          print(f"OK - report ZIP has {len(names)} entries")
+          PY

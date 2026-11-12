@@ -1,7 +1,16 @@
-# Lint: catch non-ASCII leaks and obvious style issues before they
-# reach a commit.  The non-ASCII check is critical because
-# UnicodeEncodeError on Windows is a class of bug we have already hit
-# (see CHANGELOG v0.1.0).
+# Lint: catch non-ASCII leaks in files whose output goes to a terminal.
+#
+# Why only cli.py and api.py: Windows consoles with cp1252 / cp1256
+# codepages raise UnicodeEncodeError when non-ASCII characters reach
+# stdout/stderr through a pipe.  Other modules legitimately use emojis
+# (Streamlit UI renders in the browser, UTF-8) and typographic dashes
+# (matplotlib labels, REPORT.md content), neither of which touch a
+# terminal.  This matches the local guard in tests/test_cli.py
+# (test_source_has_no_non_ascii_outside_comments is parametrized on
+# exactly these two files).
+#
+# The CHANGELOG v0.1.0 documents the Windows UnicodeEncodeError bug
+# that this guard prevents from recurring.
 
 name: lint
 
@@ -13,17 +22,27 @@ on:
 
 jobs:
   non-ascii:
-    name: ASCII guard
+    name: ASCII guard on CLI/API output
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Reject non-ASCII outside comments
+      - name: Reject non-ASCII outside comments in cli.py and api.py
         run: |
           python - <<'PY'
           import sys
           from pathlib import Path
+
+          GUARDED = [
+              "src/wds_optimizer/cli.py",
+              "src/wds_optimizer/api.py",
+          ]
           bad = []
-          for path in Path("src").rglob("*.py"):
+          for path_str in GUARDED:
+              path = Path(path_str)
+              if not path.exists():
+                  print(f"warning: {path} not found, skipping",
+                        file=sys.stderr)
+                  continue
               text = path.read_text(encoding="utf-8")
               no_comments = "\n".join(
                   line.split("#", 1)[0] for line in text.splitlines()
@@ -35,11 +54,14 @@ jobs:
                           f"{path}:{line_no}: non-ASCII {ch!r} "
                           f"(U+{ord(ch):04X})"
                       )
+
           if bad:
-              print("Non-ASCII characters found (Windows "
-                    "UnicodeEncodeError hazard):")
+              print("Non-ASCII characters found in CLI/API output strings:")
               for line in bad:
                   print("  " + line)
+              print()
+              print("Use ASCII equivalents: '[!]' for warnings,")
+              print("'->' for arrows, '-' for dashes.")
               sys.exit(1)
-          print("OK - no non-ASCII outside comments")
+          print(f"OK - no non-ASCII outside comments in {GUARDED}")
           PY
