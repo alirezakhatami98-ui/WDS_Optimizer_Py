@@ -3,32 +3,32 @@
 
 [JUNCTIONS]
 ;ID              	Elev        	Demand      	Pattern         
- 2               	255         	92.4        	                	;
- 3               	255         	92.4        	                	;
- 4               	255         	88.2        	                	;
- 5               	255         	88.2        	                	;
- 6               	255         	88.2        	                	;
- 7               	255         	88.2        	                	;
- 8               	255         	88.2        	                	;
- 9               	255         	170         	                	;
- 10              	255         	1           	                	;
- 11              	255         	170         	                	;
- 12              	255         	117.1       	                	;
- 13              	255         	117.1       	                	;
- 14              	255         	92.4        	                	;
- 15              	255         	92.4        	                	;
- 16              	260         	170         	                	;
- 17              	272.8       	57.5        	                	;
- 18              	255         	117.1       	                	;
- 19              	255         	117.1       	                	;
- 20              	255         	170         	                	;
+ 2               	255         	92.4        	2               	;
+ 3               	255         	92.4        	1               	;
+ 4               	255         	88.2        	1               	;
+ 5               	255         	88.2        	1               	;
+ 6               	255         	88.2        	1               	;
+ 7               	255         	88.2        	1               	;
+ 8               	255         	88.2        	1               	;
+ 9               	255         	170         	1               	;
+ 10              	255         	1           	1               	;
+ 11              	255         	170         	1               	;
+ 12              	255         	117.1       	1               	;
+ 13              	255         	117.1       	1               	;
+ 14              	255         	92.4        	1               	;
+ 15              	255         	92.4        	1               	;
+ 16              	260         	170         	1               	;
+ 17              	272.8       	57.5        	1               	;
+ 18              	255         	117.1       	1               	;
+ 19              	255         	117.1       	1               	;
+ 20              	255         	170         	1               	;
 
 [RESERVOIRS]
 ;ID              	Head        	Pattern         
  1               	300         	                	;
 
 [TANKS]
-;ID              	Elevation   	InitLevel   	MinLevel    	MaxLevel    	Diameter    	MinVol      	VolCurve
+;ID              	Elevation   	InitLevel   	MinLevel    	MaxLevel    	Diameter    	MinVol      	VolCurve        	Overflow
 
 [PIPES]
 ;ID              	Node1           	Node2           	Length      	Diameter    	Roughness   	MinorLoss   	Status
@@ -91,21 +91,26 @@
 
 [PATTERNS]
 ;ID              	Multipliers
+;
+ 2               	1           
+;
+ 1               	1           
+;
+ 11              	1           
+;
+ ENRG1           	1           
 
 [CURVES]
 ;ID              	X-Value     	Y-Value
 
 [CONTROLS]
 
-
-
 [RULES]
-
-
 
 [ENERGY]
  Global Efficiency  	75
  Global Price       	0
+ Global Pattern     	ENRG1
  Demand Charge      	0
 
 [EMITTERS]
@@ -135,18 +140,18 @@
 ;Tank            	Model
 
 [TIMES]
- Duration           	72
+ Duration           	72:00 
  Hydraulic Timestep 	1:00 
  Quality Timestep   	0:05 
  Pattern Timestep   	1:00 
- Pattern Start      	0:00 
- Report Timestep    	1:00 
- Report Start       	0:00 
+ Pattern Start      	0:00
+ Report Timestep    	1:00
+ Report Start       	0:00
  Start ClockTime    	12 am
- Statistic          	NONE
+ Statistic          	None
 
 [REPORT]
- Status             	No
+ Status             	Full
  Summary            	No
  Page               	0
 
@@ -155,7 +160,7 @@
  Headloss           	H-W
  Specific Gravity   	1
  Viscosity          	1
- Trials             	40
+ Trials             	50
  Accuracy           	0.001
  CHECKFREQ          	2
  MAXCHECK           	10
@@ -164,62 +169,62 @@
  Pattern            	1
  Demand Multiplier  	1.0
  Emitter Exponent   	0.5
- Quality            	Chlorine mg/L
+ Quality            	CHLORINE mg/L
  Diffusivity        	1
  Tolerance          	0.01
 
 [COORDINATES]
-;Node            	X-Coord         	Y-Coord
- 2               	2998.42         	7784.81         
- 3               	2397.15         	6882.91         
- 4               	2143.99         	5933.54         
- 5               	2191.46         	5000.00         
- 6               	2254.75         	4082.28         
- 7               	2587.03         	3212.03         
- 8               	3077.53         	2436.71         
- 9               	4295.89         	2120.25         
- 10              	3963.61         	1471.52         
- 11              	5498.42         	2420.89         
- 12              	6194.62         	3275.32         
- 13              	6305.38         	4667.72         
- 14              	6020.57         	6234.18         
- 15              	5450.95         	7705.70         
- 16              	5577.53         	1234.18         
- 17              	3441.46         	743.67          
- 18              	7302.22         	3291.14         
- 19              	8488.92         	3354.43         
- 20              	6495.25         	1851.27         
- 1               	4280.06         	8544.30         
+;Node            	X-Coord           	Y-Coord
+2               	2998.420          	7784.000          
+3               	2397.150          	6882.000          
+4               	2143.990          	5933.000          
+5               	2191.460          	5000.000          
+6               	2254.750          	4082.000          
+7               	2587.030          	3212.000          
+8               	3077.530          	2436.000          
+9               	4295.890          	2120.000          
+10              	3963.610          	1471.000          
+11              	5498.420          	2420.000          
+12              	6194.620          	3275.000          
+13              	6305.380          	4667.000          
+14              	6020.570          	6234.000          
+15              	5450.950          	7705.000          
+16              	5577.530          	1234.000          
+17              	3441.460          	743.000           
+18              	7302.220          	3291.000          
+19              	8488.920          	3354.000          
+20              	6495.250          	1851.000          
+1               	4280.060          	8544.000          
 
 [VERTICES]
-;Link            	X-Coord         	Y-Coord
- 1               	3473.10         	8354.43         
- 2               	2381.33         	7468.35         
- 3               	1954.11         	6455.70         
- 4               	1890.82         	5458.86         
- 5               	1938.29         	4572.78         
- 6               	2128.16         	3481.01         
- 7               	2444.62         	2642.41         
- 8               	3235.76         	1993.67         
- 9               	3868.67         	1787.97         
- 10              	4770.57         	2531.65         
- 11              	5577.53         	2974.68         
- 12              	5941.46         	4018.99         
- 13              	5751.58         	5490.51         
- 14              	5276.90         	6867.09         
- 15              	4454.11         	7848.10         
- 16              	3884.49         	1012.66         
- 17              	6716.77         	2958.86         
- 18              	7840.19         	3037.97         
- 19              	6257.91         	2389.24         
- 20              	6194.62         	1376.58         
- 21              	4865.51         	1424.05         
+;Link            	X-Coord           	Y-Coord
+1               	3473.100          	8354.430          
+2               	2381.330          	7468.350          
+3               	1954.110          	6455.700          
+4               	1890.820          	5458.860          
+5               	1938.290          	4572.780          
+6               	2128.160          	3481.010          
+7               	2444.620          	2642.410          
+8               	3235.760          	1993.670          
+9               	3868.670          	1787.970          
+10              	4770.570          	2531.650          
+11              	5577.530          	2974.680          
+12              	5941.460          	4018.990          
+13              	5751.580          	5490.510          
+14              	5276.900          	6867.090          
+15              	4454.110          	7848.100          
+16              	3884.490          	1012.660          
+17              	6716.770          	2958.860          
+18              	7840.190          	3037.970          
+19              	6257.910          	2389.240          
+20              	6194.620          	1376.580          
+21              	4865.510          	1424.050          
 
 [LABELS]
-;X-Coord           Y-Coord          Label & Anchor Node
+;X-Coord             Y-Coord             Label & Anchor Node
 
 [BACKDROP]
- DIMENSIONS     	0.00            	0.00            	10000.00        	10000.00        
+  DIMENSIONS  	1826.744          	352.950           	8806.167          	8934.050          
  UNITS          	None
  FILE           	
  OFFSET         	0.00            	0.00            

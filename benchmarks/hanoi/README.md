@@ -1,9 +1,9 @@
 # Hanoi network
 
 The Hanoi network is one of the two canonical WDS design benchmarks
-(the other being the New York Tunnels Problem).  It has a single
-reservoir feeding a branched-then-looped layout of 34 pipes and 32
-demand junctions.
+(the other being the New York Tunnels Problem).  A single reservoir
+feeds a branched-then-looped layout of 34 pipes and 32 demand
+junctions.
 
 ## Source
 
@@ -20,33 +20,28 @@ Cost vector and diameter set standardized for GA benchmarking in:
 > *Journal of Water Resources Planning and Management*, 120(4),
 > 423-443.
 
-The specific `.inp` file in this folder is sourced from the MINLP
-benchmark dataset distributed with:
+The `.inp` file in this folder is sourced from the MINLP benchmark
+dataset distributed with:
 
 > Bragalli, C., D'Ambrosio, C., Lee, J., Lodi, A., and Toth, P.
 > (2008). "Water network design by MINLP." IBM Research Report
-> RC24495.  Also: *Optimization and Engineering* 13, 55-79 (2012).
-
-The data in all three sources is identical; the citation set above
-is provided so the file can be traced to any of them.
+> RC24495.
 
 ## Files
 
 | File | Content | Unit |
 |------|---------|------|
 | `hanoi.inp` | EPANET network definition | SI (LPS) |
-| `D.txt` | 6 candidate diameters, one per line | **inches** |
-| `Cost.txt` | Unit cost per metre, same order as D.txt | USD/m |
+| `D.txt` | 6 candidate diameters | **inches** |
+| `Cost.txt` | Unit cost per metre, same order as `D.txt` | USD/m |
 
-**Note the diameter unit.** `D.txt` lists diameters in inches.  The
-CLI needs `--diam-unit in`; the API needs `diam_unit="in"`.  The GUI
-selects it from the sidebar.  The pipe diameters inside `hanoi.inp`
-are already in metres (converted by EPANET from the LPS unit system),
-so no conversion is needed there.
+**Note the diameter unit.** `D.txt` lists diameters in **inches**.
+The CLI needs `--diam-unit in`; the API needs `diam_unit="in"`.
+The `.inp` pipe diameters are already in metres (EPANET converts
+from LPS).
 
-Diameters (inches → metres):
-  12 → 0.3048 | 16 → 0.4064 | 20 → 0.5080
-  24 → 0.6096 | 30 → 0.7620 | 40 → 1.0160
+Diameters (in → m):
+12 → 0.3048 | 16 → 0.4064 | 20 → 0.5080 | 24 → 0.6096 | 30 → 0.7620 | 40 → 1.0160
 
 ## Published best-known cost
 
@@ -56,31 +51,50 @@ Diameters (inches → metres):
 > optimal design of water distribution networks." *Journal of
 > Hydroinformatics*, 12(1), 66-82.
 
-Prior to Suribabu, the best-known value was $6.112 million
-(Simpson et al. 1994).  Most modern metaheuristics (GA, PSO, DE,
-SADE, ACO) converge on $6.081M within a few thousand evaluations.
+Prior to Suribabu the best-known value was $6.112 million
+(Simpson et al. 1994).
 
-## Constraint values
+## Constraint settings
 
-- **Pmin = 30 m** at every junction.  **This is the only constraint
-  used by the standard Hanoi benchmark.**
-- **Pmax, Vmin, Vmax are all disabled.**
+**Pmin = 30 m, and NOTHING ELSE.**
 
-### Why Hanoi has no velocity constraint
+This is the standard formulation in the reference papers (Fujiwara &
+Khang 1990; Simpson et al. 1994; Dandy et al. 1996; Suribabu 2010;
+Zheng et al. 2013).  None of them enforces a velocity constraint.
 
-This is a distinctive feature of the Hanoi benchmark that is often
-missed.  The total demand is ≈ 5540 L/s.  The first pipe (from the
-reservoir) carries the entire demand.  Even with the largest
-available diameter (1016 mm), the velocity in pipe 1 is ≈ 6.8 m/s.
-Any Vmax below this value makes the problem infeasible by
-construction — no pipe size in D.txt can satisfy it.
+**Do not enable Vmax.** The optimal Hanoi solution has a few pipes
+whose velocities exceed 9 m/s; enforcing Vmax = 2.5 m/s renders the
+problem infeasible (zero feasible designs after thousands of
+evaluations).  The same is true for any other Vmax value below ~10
+m/s.
 
-All reference papers (Fujiwara & Khang 1990; Simpson et al. 1994;
-Suribabu 2010; Zheng et al. 2013) therefore optimize Hanoi with
-**Pmin only**.  A run that disables velocity is not a weaker test —
-it is the correct test.
+| Constraint | Value |
+|------------|-------|
+| Pmin | **30 m** (enabled) |
+| Pmax | disabled |
+| Vmin | disabled |
+| Vmax | **disabled** |
 
-### Reproduction
+In the CLI:
+
+```bash
+--pmin 30
+```
+
+(no `--vmax`, no `--pmax`, no `--vmin`).
+
+In the API:
+
+```python
+constraints={
+    "Pmin": {"enabled": True,  "value": 30.0},
+    "Pmax": {"enabled": False, "value": 100.0},
+    "Vmin": {"enabled": False, "value": 0.0},
+    "Vmax": {"enabled": False, "value": 2.5},
+}
+```
+
+## Reproduction
 
 ```bash
 wds-optimize run \
@@ -93,35 +107,13 @@ wds-optimize run \
     --output hanoi_sade.json
 ```
 
-Expected: feasible design, cost ≤ $6.10 million. Do not pass
---vmax — it will make the run infeasible regardless of algorithm.
-
-Via the Python API:
-
-```python
-from wds_optimizer import OptimizationRequest, run_optimization
-
-result = run_optimization(OptimizationRequest(
-    inp_path="benchmarks/hanoi/hanoi.inp",
-    d_path="benchmarks/hanoi/D.txt",
-    cost_path="benchmarks/hanoi/Cost.txt",
-    diam_unit="in",
-    algorithms=["SADE"], n_runs=10, seed=1, ns=200, max_gen=500,
-    constraints={
-        "Pmin": {"enabled": True,  "value": 30.0},
-        "Pmax": {"enabled": False, "value": 100.0},
-        "Vmin": {"enabled": False, "value": 0.0},
-        "Vmax": {"enabled": False,  "value": 2.5},
-    },
-))
-print(f"{result.best_score:,.0f}  feasible={result.best_feasible}")
-```
+Expected: feasible design, cost ≤ $6.10 million.
 
 ## Verification status
 
 Tracked by `tests/test_algorithms_benchmarks.py`:
 
-- GA (Simpson 1994 implementation) — *pending verification*
-- PSO (Suribabu 2006 implementation) — *pending verification*
-- DE (Suribabu 2010 implementation) — *pending verification*
-- SADE (Zheng 2013 implementation) — *pending verification*
+- GA (Simpson 1994 implementation) — pending verification
+- PSO (Suribabu 2006 implementation) — pending verification
+- DE (Suribabu 2010 implementation) — pending verification
+- SADE (Zheng 2013 implementation) — pending verification
