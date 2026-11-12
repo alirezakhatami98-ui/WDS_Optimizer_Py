@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wds-optimizer"
-version = "0.1.0"
+version = "0.2.0"
 description = "Water distribution network design optimization with WNTR"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"

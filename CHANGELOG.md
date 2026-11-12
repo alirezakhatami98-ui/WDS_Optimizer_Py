@@ -9,6 +9,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (nothing yet)
 
+## [0.2.0] - 2026-11-13
+
+Second public release.  Adds benchmarks, verification tests, and
+honest per-algorithm documentation.  First release with published-
+benchmark reproducibility verified by the test suite.
+
+### Added
+
+#### Benchmarks (`benchmarks/`)
+- `hanoi/` (Fujiwara & Khang 1990; Simpson et al. 1994) —
+  best-known cost $6.081M, Pmin = 30 m only
+- `twoloop/` (Alperovits & Shamir 1977) — best-known cost $419,000,
+  Pmin = 30 m only
+- `nytp/README.md` — reserved for v0.3 (requires duplication
+  formulation, documented)
+- Per-benchmark READMEs with citation, unit notes, constraint
+  settings, and reproduction commands
+- `benchmarks/README.md` index with constraint guidance
+
+#### Verification (`tests/test_algorithms_benchmarks.py`)
+- Slow-marked tests (`@pytest.mark.slow`, excluded by default)
+  that run each algorithm on hanoi and twoloop and assert the
+  best-seed cost is within a documented tolerance of the correct
+  reference (GA: Simpson $6.112M; PSO/DE/SADE: Suribabu $6.081M;
+  two-loop: Alperovits & Shamir $419K).
+
+#### Documentation
+- `docs/algorithms.md` — for each algorithm: what it IS, what it
+  is NOT, verified gaps, reference paper, and roadmap for
+  paper-faithful presets in v0.3
+- `scripts/baseline_benchmarks.py` — regenerates baseline table
+
+#### Packaging
+- `pytest` markers (`slow`) and `addopts = '-m "not slow"'` so
+  CI stays fast; full verification runs on demand.
+
+### Fixed
+
+- `pyproject.toml` markers array was TOML-invalid (unclosed array,
+  two adjacent strings without a comma); `pip install -e .` failed
+  on CI.
+- `benchmarks/hanoi/README.md` incorrectly listed Vmax = 2.5 m/s
+  as active.  No reference paper on Hanoi enforces a velocity
+  constraint; Vmax = 2.5 m/s makes the problem infeasible (the
+  optimal design has pipes at ~9 m/s).
+- `tests/test_algorithms_benchmarks.py` (initial draft) compared
+  GA against Suribabu's DE result ($6.081M), which is unfair for a
+  Simple GA.  Fixed to compare GA against Simpson 1994's Simple GA
+  ($6.112M), which is the correct reference for this algorithm
+  class.
+
+### Changed
+
+- `pyproject.toml` `[project]` version bumped to 0.2.0.
+
+### Notes
+
+- v0.1.0 (initial release) remains valid but did not include
+  benchmarks.  Use v0.2.0 for benchmark reproducibility work.
+- Paper-faithful presets (Simpson 1994 GA, Dandy 1996 Improved GA,
+  Suribabu 2006 PSO, Suribabu 2010 DE) are planned for v0.3.
+
 ## [0.1.0] - 2026-11-11
 
 First public release.  Single-objective optimization of water
@@ -118,5 +180,6 @@ API, backed by 123 tests.
 - Severity helper (12).
 - Miscellaneous (13).
 
-[Unreleased]: https://github.com/alirezakhatami98-ui/WDS_Optimizer_Py/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/alirezakhatami98-ui/WDS_Optimizer_Py/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/alirezakhatami98-ui/WDS_Optimizer_Py/releases/tag/v0.2.0
 [0.1.0]: https://github.com/alirezakhatami98-ui/WDS_Optimizer_Py/releases/tag/v0.1.0

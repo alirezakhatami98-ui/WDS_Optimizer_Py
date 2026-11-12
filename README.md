@@ -149,8 +149,9 @@ streamlit run src/wds_optimizer/app/streamlit_app.py
 | Reproducibility report (ZIP) | ✅ |
 | CLI (`wds-optimize`) | ✅ |
 | Python API | ✅ |
-| Multi-objective optimization | 🔜 v0.2 |
-| Plugin architecture | 🔜 v0.3 |
+| Multi-objective optimization | 🔜 v0.4 |
+| Plugin architecture | 🔜 v0.5 |
+| Paper-faithful GA/PSO/DE presets | 🔜 v0.3 |
 
 ## Tests
 
@@ -160,6 +161,27 @@ pytest tests/ -v
 
 123 tests. Runtime ~3 minutes on a laptop; the algorithm tests use
 synthetic networks so they stay under 1 s each.
+
+## Benchmarks
+
+Reference networks with published best-known solutions live in
+`benchmarks/`.  See `benchmarks/README.md` for usage and
+`docs/algorithms.md` for the verified performance of each algorithm.
+
+```bash
+wds-optimize run \
+    --inp benchmarks/hanoi/hanoi.inp \
+    --d   benchmarks/hanoi/D.txt \
+    --cost benchmarks/hanoi/Cost.txt \
+    --diam-unit in \
+    --algo SADE --pmin 30
+```
+
+Verification is a separate slow-test suite:
+
+```bash
+pytest -m slow -v
+```
 
 ## Citing
 
