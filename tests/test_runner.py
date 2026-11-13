@@ -204,23 +204,6 @@ def test_meta_propagates_to_run_record():
     assert r.n_sim == 180
     assert r.nfe_to_best == 120
 
-
-def test_restart_settings_recorded():
-    problem = _problem()
-    cfg = build_algorithm_config(NS=10, MaxGen=50)
-    cfg.Restart.Enabled = True
-    cfg.Restart.Patience = 7
-    cfg.Restart.MaxRestarts = 2
-    cfg.Restart.Mode = "perturb"
-    cfg.Restart.PerturbRate = 0.4
-    result = _run(problem, cfg)
-    assert result.restart["enabled"] is True
-    assert result.restart["patience"] == 7
-    assert result.restart["max_restarts"] == 2
-    assert result.restart["mode"] == "perturb"
-    assert result.restart["perturb_rate"] == pytest.approx(0.4)
-
-
 def test_base_config_is_not_mutated():
     """run_experiment copies per-run config; caller's stays intact."""
     problem = _problem()

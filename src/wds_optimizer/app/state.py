@@ -17,8 +17,6 @@ _KEYS = {
     "sade_fmin": 0.1, "sade_fmax": 0.9, "sade_crmin": 0.1, "sade_crmax": 0.9,
     "sade_conv": True, "sade_tol": 1e-6, "sade_stag": 300,
     "n_runs": 3, "exp_seed": 1,
-    "rs_enabled": False, "rs_patience": 30, "rs_max": 3,
-    "rs_keep_best": False, "rs_mode": "perturb", "rs_perturb": 0.3,
     "only_feasible": False,
     "experiment": None,
     "best_algo": None, "best_run_index": None,

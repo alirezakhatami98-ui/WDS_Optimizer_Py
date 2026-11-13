@@ -117,8 +117,6 @@ def build_snapshot(
             "de_f", "de_cr", "de_strategy",
             "sade_fmin", "sade_fmax", "sade_crmin", "sade_crmax",
             "sade_conv", "sade_tol",
-            "rs_enabled", "rs_patience", "rs_max", "rs_keep_best",
-            "rs_mode", "rs_perturb",
         )},
         "problem": {
             "pipe_names":     list(problem_snapshot["pipe_names"]),
@@ -205,7 +203,6 @@ def restore_experiment(data: dict) -> ExperimentResult:
         variable_pipes=np.array(data["problem"]["VariablePipes"]),
         fixed_pipes=np.array(data["problem"]["FixedPipes"]),
         cancelled=bool(exp.get("cancelled", False)),   # old files: False
-        restart=dict(exp.get("restart", {})),          # old files: {}
         # Extended constraints.  Backward compat: old snapshots lack
         # these keys in data["problem"] and use the pre-Pmax/Vmin
         # defaults (Pmin on, Vmax on, others off).
