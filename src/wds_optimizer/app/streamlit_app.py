@@ -39,6 +39,9 @@ import streamlit as st
 import wntr
 
 from wds_optimizer.algorithms.config import build_algorithm_config
+from wds_optimizer.algorithms.registry import (
+    ALGORITHM_REGISTRY, list_algorithms,
+)
 from wds_optimizer.api import _parse_network, build_problem
 from wds_optimizer.experiments.runner import (
     ExperimentResult,
@@ -121,12 +124,28 @@ def _get_network_units(inp_path: str):
 #  UI helpers
 # =====================================================================
 
-ALGORITHMS = ("GA", "PSO", "DE", "SADE")
+# Algo colors: keyed by short_id.  A plugin algorithm not listed here
+# gets a fallback color (gray) at render time.  We keep the mapping
+# for the four built-ins only; the visual identity of built-in
+# algorithms doesn't need to be derived from META.
 ALGO_COLORS = {"GA": "#d9480f", "PSO": "#1971c2", "DE": "#7048e8",
                "SADE": "#0b7285"}
 ALGO_COLORS_A = {"GA": "#f59f00", "PSO": "#15aabf", "DE": "#b197fc",
                  "SADE": "#66d9e8"}
-SADE_TOLS = (1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3)
+
+
+def _meta_options(short_id: str, param_key: str) -> tuple:
+    """Look up a param's ``options`` list from ALGORITHM_META."""
+    meta = ALGORITHM_REGISTRY.get(short_id, {}).get("meta", {})
+    for p in meta.get("params", []):
+        if p.get("key") == param_key:
+            return tuple(p.get("options", ()))
+    return ()
+
+
+SADE_TOLS = _meta_options("SADE", "sade_tol") or (
+    1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3,
+)
 
 
 def _nearest_tol(v):
@@ -233,21 +252,25 @@ def _init_widget_state():
         "n_runs_input":      int(st.session_state.get("n_runs", 3)),
         "exp_seed_input":    int(st.session_state.get("exp_seed", 1)),
         "algo_input":        ["GA"],
-        "de_f_input":        float(st.session_state.get("de_f", 0.5)),
-        "de_cr_input":       float(st.session_state.get("de_cr", 0.3)),
-        "de_strategy_input": st.session_state.get("de_strategy", "rand/1/bin"),
-        "sade_fmin_input":   float(st.session_state.get("sade_fmin", 0.1)),
-        "sade_fmax_input":   float(st.session_state.get("sade_fmax", 0.9)),
-        "sade_crmin_input":  float(st.session_state.get("sade_crmin", 0.1)),
-        "sade_crmax_input":  float(st.session_state.get("sade_crmax", 0.9)),
-        "sade_conv_input":   bool(st.session_state.get("sade_conv", True)),
-        "sade_tol_input":    _nearest_tol(
-            float(st.session_state.get("sade_tol", 1e-6))),
-        "sade_stag_input":   int(st.session_state.get("sade_stag", 300)),
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+    # Seed algorithm-param widget keys from META (covers all registered
+    # algorithms — including future plugins — without GUI changes).
+    for entry in ALGORITHM_REGISTRY.values():
+        meta = entry["meta"]
+        for p in meta["params"]:
+            widget_key = p["key"] + "_input"
+            if widget_key in st.session_state:
+                continue
+            default = p["default"]
+            # Snap sade_tol to nearest allowed option (its widget is a
+            # select_slider; only the listed options are valid).
+            if p.get("widget") == "select_slider" and p.get("options"):
+                default = _nearest_tol(float(default))
+            st.session_state[widget_key] = default
 
 def _render_sidebar():
     _init_widget_state()          # ← این خط اضافه شود
@@ -408,94 +431,23 @@ def _render_sidebar():
         st.header("3. Algorithm")
         # Algorithm
         algo = st.multiselect(
-            "Algorithms to run", list(ALGORITHMS), key="algo_input",
-            help="Every selected algorithm runs with the same number of "
-                 "runs, seeds and restart settings.",
+            "Algorithms to run", list_algorithms(), key="algo_input",
+            help="Every selected algorithm runs with the same number "
+                 "of runs and seeds.",
         )
         if not algo:
             st.caption("Select at least one algorithm.")
 
-        if "GA" in algo:
-            with st.expander("GA parameters", expanded=True):
-                st.number_input("Pc (crossover)", 0.0, 1.0, step=0.05,
-                                key="ga_pc_input")
-                st.number_input("Pm (mutation)", 0.0, 1.0, step=0.01,
-                                key="ga_pm_input")
-                st.selectbox("Selection", ["tournament", "roulette"],
-                             key="ga_sel_input")
-
-        if "PSO" in algo:
-            with st.expander("PSO parameters", expanded=True):
-                st.number_input("w (inertia)", 0.0, 2.0, step=0.05,
-                                key="pso_w_input")
-                st.number_input("c1 (cognitive)", 0.0, 3.0, step=0.1,
-                                key="pso_c1_input")
-                st.number_input("c2 (social)", 0.0, 3.0, step=0.1,
-                                key="pso_c2_input")
-
-        if "DE" in algo:
-            with st.expander("DE parameters", expanded=True):
-                st.number_input("F (differential weight)", 0.05, 2.0,
-                                step=0.05, key="de_f_input")
-                st.number_input("CR (crossover rate)", 0.0, 1.0, step=0.05,
-                                key="de_cr_input",
-                                help="Share of genes taken from the mutant. "
-                                     "Low values suit separable problems "
-                                     "such as pipe sizing; try a DE_CR sweep.")
-                st.selectbox("Strategy", list(DE_STRATEGIES),
-                             key="de_strategy_input")
-
-        if "SADE" in algo:
-            with st.expander("SADE parameters", expanded=True):
-                st.caption(
-                    "Self-adaptive DE (Zheng, Zecchin & Simpson 2013): F "
-                    "and CR evolve per individual inside these ranges "
-                    "(paper: 0.1–0.9 for both)."
-                )
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.number_input("F min", 0.0, 2.0, step=0.05,
-                                    key="sade_fmin_input")
-                    st.number_input("CR min", 0.0, 1.0, step=0.05,
-                                    key="sade_crmin_input")
-                with c2:
-                    st.number_input("F max", 0.0, 2.0, step=0.05,
-                                    key="sade_fmax_input")
-                    st.number_input("CR max", 0.0, 1.0, step=0.05,
-                                    key="sade_crmax_input")
-                st.checkbox(
-                    "Stop when the population converges (Cv < tolerance)",
-                    key="sade_conv_input",
-                    help="The paper's termination rule: the run ends when "
-                         "all individuals reach (almost) the same cost. "
-                         "MaxGen is then only an upper cap. Untick to run "
-                         "the full MaxGen like the other algorithms. With "
-                         "restart enabled, convergence triggers a restart "
-                         "while restarts remain.",
-                )
-                st.select_slider(
-                    "Cv tolerance", options=list(SADE_TOLS),
-                    key="sade_tol_input",
-                    format_func=lambda v: f"{v:.0e}",
-                    disabled=not st.session_state.get(
-                        "sade_conv_input", True),
-                )
-                st.number_input(
-                    "Stagnation safeguard (generations without "
-                    "improvement; 0 = off)",
-                    min_value=0, max_value=10000, step=10,
-                    key="sade_stag_input",
-                    help="Matches the reference MATLAB implementation: "
-                         "the run stops if the current epoch's best "
-                         "cost has not improved for this many "
-                         "generations. The paper relies only on "
-                         "Cv < Tol; set 0 to follow the paper strictly.",
-                )
-                st.caption(
-                    "Paper's population heuristic: N between 1×D and 6×D "
-                    "(D = number of variable pipes), e.g. N = 200 for "
-                    "Hanoi (D = 34)."
-                )
+        for short_id in algo:
+            entry = ALGORITHM_REGISTRY.get(short_id)
+            if entry is None:
+                continue
+            meta = entry["meta"]
+            with st.expander(
+                f"{meta['display_name']} parameters", expanded=True,
+            ):
+                st.caption(meta["description"])
+                _render_params_from_meta(meta)
 
         st.divider()
         st.header("4. Experiment")
@@ -609,7 +561,7 @@ def _render_sidebar():
                 placeholder="e.g. 0.6, 0.7, 0.8, 0.9",
             )
             sweep_algo = st.multiselect(
-                "Algorithms", list(ALGORITHMS), default=["GA"],
+                "Algorithms", list_algorithms(), default=["GA"],
                 key="sweep_algo_input",
             )
             sweep_runs = st.number_input(
@@ -706,6 +658,67 @@ def _sweep_param_label(key: str, units: dict | None = None) -> str:
         return f"Max velocity ({u})"
     return SWEEP_PARAMETERS.get(key, key)
 
+def _render_params_from_meta(meta: dict) -> None:
+    """Render widgets for every param in ALGORITHM_META['params'].
+
+    The widget type is chosen from ``param['widget']`` if present,
+    else from ``param['type']``.  ``depends_on`` (if present) disables
+    the widget when another widget's state doesn't match.
+    """
+    for p in meta["params"]:
+        widget_key = p["key"] + "_input"
+        disabled = False
+        depends = p.get("depends_on")
+        if depends:
+            dep_key, dep_expected = depends
+            disabled = bool(st.session_state.get(dep_key, False)) != bool(dep_expected)
+
+        widget_hint = p.get("widget")
+
+        if widget_hint == "select_slider" and p.get("options"):
+            st.select_slider(
+                p["display_name"],
+                options=list(p["options"]),
+                key=widget_key,
+                format_func=lambda v: f"{v:.0e}",
+                disabled=disabled,
+                help=p.get("description", ""),
+            )
+        elif p["type"] == "float":
+            st.number_input(
+                p["display_name"],
+                min_value=float(p.get("min", 0.0)),
+                max_value=float(p.get("max", 1_000_000.0)),
+                step=float(p.get("step", 0.01)),
+                key=widget_key,
+                disabled=disabled,
+                help=p.get("description", ""),
+            )
+        elif p["type"] == "int":
+            st.number_input(
+                p["display_name"],
+                min_value=int(p.get("min", 0)),
+                max_value=int(p.get("max", 1_000_000)),
+                step=int(p.get("step", 1)),
+                key=widget_key,
+                disabled=disabled,
+                help=p.get("description", ""),
+            )
+        elif p["type"] == "choice":
+            st.selectbox(
+                p["display_name"],
+                options=p["choices"],
+                key=widget_key,
+                disabled=disabled,
+                help=p.get("description", ""),
+            )
+        elif p["type"] == "bool":
+            st.checkbox(
+                p["display_name"],
+                key=widget_key,
+                disabled=disabled,
+                help=p.get("description", ""),
+            )
 
 # =====================================================================
 #  Preparation: build the Problem dict from loaded files
@@ -808,40 +821,76 @@ def _sync_sidebar_state(with_n_runs: bool = True):
         if src in st.session_state:
             st.session_state[dst] = st.session_state[src]
 
+    # Algorithm params: widget_key → canonical key, driven by META.
+    # This keeps the canonical keys (ga_pc, ga_pm, ...) in sync for
+    # snapshot save.  Plugin algorithms get their canonical keys too.
+    for entry in ALGORITHM_REGISTRY.values():
+        for p in entry["meta"]["params"]:
+            widget_key = p["key"] + "_input"
+            canonical_key = p["key"]
+            if widget_key in st.session_state:
+                st.session_state[canonical_key] = st.session_state[widget_key]
+
+
+def _apply_param_to_config(
+    cfg, short_id: str, param_meta: dict, value,
+) -> None:
+    """Map a META param value onto the config object.
+
+    If the param declares ``maps_to``, set the corresponding field on
+    the family's dataclass (e.g. ``cfg.GA.Pc``).  Otherwise store the
+    value under ``cfg.extra[short_id][param_key]`` for the algorithm
+    to read as it likes (this is the plugin path).
+    """
+    maps_to = param_meta.get("maps_to")
+    if maps_to is not None:
+        family, field_name = maps_to
+        family_cfg = getattr(cfg, family, None)
+        if family_cfg is None or not hasattr(family_cfg, field_name):
+            raise ValueError(
+                f"META param {param_meta['key']!r} maps to "
+                f"{family}.{field_name}, which does not exist on "
+                f"AlgorithmConfig.  This is a bug in the algorithm's "
+                f"ALGORITHM_META."
+            )
+        setattr(family_cfg, field_name, value)
+    else:
+        cfg.extra.setdefault(short_id, {})[param_meta["key"]] = value
+
 
 def _build_base_cfg():
     cfg = build_algorithm_config(
         int(st.session_state.ns), int(st.session_state.max_gen)
     )
-    cfg.GA.Pc = st.session_state.ga_pc
-    cfg.GA.Pm = st.session_state.ga_pm
-    cfg.GA.Selection = st.session_state.ga_sel
-    cfg.PSO.w = st.session_state.pso_w
-    cfg.PSO.c1 = st.session_state.pso_c1
-    cfg.PSO.c2 = st.session_state.pso_c2
-    cfg.DE.F = float(st.session_state.de_f)
-    cfg.DE.CR = float(st.session_state.de_cr)
-    cfg.DE.Strategy = str(st.session_state.de_strategy)
-    cfg.SADE.Fmin = float(st.session_state.sade_fmin)
-    cfg.SADE.Fmax = float(st.session_state.sade_fmax)
-    cfg.SADE.CRmin = float(st.session_state.sade_crmin)
-    cfg.SADE.CRmax = float(st.session_state.sade_crmax)
-    cfg.SADE.UseConvergence = bool(st.session_state.sade_conv)
-    cfg.SADE.Tol = float(st.session_state.sade_tol)
-    cfg.SADE.StagnationMax = int(st.session_state.sade_stag)
-    if cfg.SADE.Fmin > cfg.SADE.Fmax or cfg.SADE.CRmin > cfg.SADE.CRmax:
-        raise ValueError("SADE: each minimum must not exceed its maximum "
-                         "(F min ≤ F max, CR min ≤ CR max).")
-    # Restart-on-stagnation is disabled in the GUI.  It is not part of
-    # any of the four reference papers, and the paper-faithful presets
-    # we are building (v0.3) must not have it.  Advanced API users can
-    # still pass RestartConfig(Enabled=True) directly; plugin authors
-    # (v0.5) can implement their own restart logic inside their own
-    # algorithms.
+
+    # Populate each selected algorithm's params from session_state.
+    selected = st.session_state.get("algo_input", [])
+    for short_id in selected:
+        entry = ALGORITHM_REGISTRY.get(short_id)
+        if entry is None:
+            continue
+        for p in entry["meta"]["params"]:
+            widget_key = p["key"] + "_input"
+            value = st.session_state.get(widget_key, p["default"])
+            _apply_param_to_config(cfg, short_id, p, value)
+
+    # Restart is disabled in the GUI (see CHANGELOG v0.2.1).
     cfg.Restart.Enabled = False
+
+    # SADE-specific validation (Fmin/Fmax, CRmin/CRmax).
+    if "SADE" in selected:
+        if cfg.SADE.Fmin > cfg.SADE.Fmax:
+            raise ValueError(
+                f"SADE Fmin ({cfg.SADE.Fmin}) must be <= "
+                f"Fmax ({cfg.SADE.Fmax})."
+            )
+        if cfg.SADE.CRmin > cfg.SADE.CRmax:
+            raise ValueError(
+                f"SADE CRmin ({cfg.SADE.CRmin}) must be <= "
+                f"CRmax ({cfg.SADE.CRmax})."
+            )
+
     return cfg
-
-
 # =====================================================================
 #  Background jobs: start -> live panel (fragment) -> finalize
 # =====================================================================
@@ -859,7 +908,7 @@ def _start_run(algo_label: str):
 
     problem, units, wn = _prepare_problem()
     base_cfg = _build_base_cfg()
-    algos = [a for a in ALGORITHMS if a in (algo_label or [])]
+    algos = [a for a in list_algorithms() if a in (algo_label or [])]
     if not algos:
         raise ValueError("Select at least one algorithm.")
     if ("DE" in algos or "SADE" in algos) and int(st.session_state.ns) < 4:
@@ -1287,30 +1336,23 @@ def _restore_from_snapshot(data: dict):
     # Derive algo_input from the loaded experiment's algorithms.
     saved = set(data.get("experiment", {}).get("algorithms", []))
     widget_updates["algo_input"] = (
-        [a for a in ALGORITHMS if a in saved] or ["GA"]
+        [a for a in list_algorithms() if a in saved] or ["GA"]
     )
-    # DE settings (files saved before DE existed keep the current ones)
-    widget_updates["de_f_input"] = float(
-        cfg.get("de_f") or st.session_state.get("de_f", 0.5))
-    widget_updates["de_cr_input"] = float(
-        cfg.get("de_cr") or st.session_state.get("de_cr", 0.3))
-    widget_updates["de_strategy_input"] = (
-        cfg.get("de_strategy") or "rand/1/bin")
-    # SADE settings (files saved before SADE existed keep the defaults)
-    widget_updates["sade_fmin_input"] = float(
-        cfg.get("sade_fmin") if cfg.get("sade_fmin") is not None else 0.1)
-    widget_updates["sade_fmax_input"] = float(
-        cfg.get("sade_fmax") if cfg.get("sade_fmax") is not None else 0.9)
-    widget_updates["sade_crmin_input"] = float(
-        cfg.get("sade_crmin") if cfg.get("sade_crmin") is not None else 0.1)
-    widget_updates["sade_crmax_input"] = float(
-        cfg.get("sade_crmax") if cfg.get("sade_crmax") is not None else 0.9)
-    widget_updates["sade_conv_input"] = bool(
-        cfg.get("sade_conv") if cfg.get("sade_conv") is not None else True)
-    widget_updates["sade_tol_input"] = _nearest_tol(
-        float(cfg.get("sade_tol") or 1e-6))
-    widget_updates["sade_stag_input"] = int(
-        cfg.get("sade_stag") if cfg.get("sade_stag") is not None else 300)
+    # Algorithm params from META.  For each registered algorithm, for
+    # each declared param: if the snapshot has a value for it, use it;
+    # else use the META default.  Snap sade_tol to its allowed options.
+    for entry in ALGORITHM_REGISTRY.values():
+        for p in entry["meta"]["params"]:
+            widget_key = p["key"] + "_input"
+            canonical_key = p["key"]
+            raw = cfg.get(canonical_key)
+            if raw is None:
+                value = p["default"]
+            else:
+                value = raw
+            if p.get("widget") == "select_slider" and p.get("options"):
+                value = _nearest_tol(float(value))
+            widget_updates[widget_key] = value
 
     st.session_state._pending_restore = widget_updates
 

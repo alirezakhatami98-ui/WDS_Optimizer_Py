@@ -247,6 +247,7 @@ ALGORITHM_META = {
             "type": "float",
             "default": 0.7,
             "min": 0.0, "max": 2.0, "step": 0.05,
+            "maps_to": ("PSO", "w"),
             "description": (
                 "Momentum coefficient; keeps particles moving in "
                 "their current direction."
@@ -259,6 +260,7 @@ ALGORITHM_META = {
             "type": "float",
             "default": 1.5,
             "min": 0.0, "max": 3.0, "step": 0.1,
+            "maps_to": ("PSO", "c1"),
             "description": (
                 "Pull toward the particle's own best position."
             ),
@@ -270,6 +272,7 @@ ALGORITHM_META = {
             "type": "float",
             "default": 1.5,
             "min": 0.0, "max": 3.0, "step": 0.1,
+            "maps_to": ("PSO", "c2"),
             "description": (
                 "Pull toward the swarm's global best position."
             ),

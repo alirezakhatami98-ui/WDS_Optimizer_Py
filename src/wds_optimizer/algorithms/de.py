@@ -276,6 +276,7 @@ ALGORITHM_META = {
             "type": "float",
             "default": 0.5,
             "min": 0.0, "max": 2.0, "step": 0.05,
+            "maps_to": ("DE", "F"),
             "description": (
                 "Scale applied to the differential vector in mutation."
             ),
@@ -287,6 +288,7 @@ ALGORITHM_META = {
             "type": "float",
             "default": 0.3,
             "min": 0.0, "max": 1.0, "step": 0.05,
+            "maps_to": ("DE", "CR"),
             "description": (
                 "Probability that each gene is taken from the mutant. "
                 "Low values suit separable problems such as pipe "
@@ -301,6 +303,7 @@ ALGORITHM_META = {
             "default": "rand/1/bin",
             "choices": ["rand/1/bin", "best/1/bin",
                         "current-to-best/1/bin"],
+            "maps_to": ("DE", "Strategy"),
             "description": "DE mutation scheme.",
             "constraint_policy": "deb_prefers",
         },

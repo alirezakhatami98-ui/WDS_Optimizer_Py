@@ -308,6 +308,7 @@ ALGORITHM_META = {
             "type": "float",
             "default": 0.8,
             "min": 0.0, "max": 1.0, "step": 0.05,
+            "maps_to": ("GA", "Pc"),
             "description": (
                 "Probability that a mating pair undergoes crossover."
             ),
@@ -319,6 +320,7 @@ ALGORITHM_META = {
             "type": "float",
             "default": 0.03,
             "min": 0.0, "max": 1.0, "step": 0.01,
+            "maps_to": ("GA", "Pm"),
             "description": (
                 "Per-gene probability of resetting to a random "
                 "diameter index."
@@ -331,8 +333,8 @@ ALGORITHM_META = {
             "type": "choice",
             "default": "tournament",
             "choices": ["tournament", "roulette"],
+            "maps_to": ("GA", "Selection"),
             "description": "Parent selection operator.",
-            "constraint_policy": "deb_prefers",
         },
     ],
 }

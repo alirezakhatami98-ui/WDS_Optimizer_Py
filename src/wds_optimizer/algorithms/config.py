@@ -83,6 +83,12 @@ class AlgorithmConfig:
     SADE: SADEConfig = field(default_factory=SADEConfig)
     Restart: RestartConfig = field(default_factory=RestartConfig)
     Parallel: ParallelConfig = field(default_factory=ParallelConfig)
+    # Plugin-only params: ``extra[short_id][param_key] = value``.
+    # Built-in algorithms map their params into the typed fields above
+    # (via ALGORITHM_META["params"][*]["maps_to"]); plugin algorithms
+    # whose params don't map to a typed field land here.  Algorithms
+    # read their own extra values as they wish.
+    extra: dict[str, dict] = field(default_factory=dict)
 
 
 def build_algorithm_config(NS: int, MaxGen: int) -> AlgorithmConfig:

@@ -350,6 +350,7 @@ ALGORITHM_META = {
             "type": "float",
             "default": 0.1,
             "min": 0.0, "max": 2.0, "step": 0.05,
+            "maps_to": ("SADE", "Fmin"),
             "description": (
                 "Lower bound of the mutation weighting factor range."
             ),
@@ -361,6 +362,7 @@ ALGORITHM_META = {
             "type": "float",
             "default": 0.9,
             "min": 0.0, "max": 2.0, "step": 0.05,
+            "maps_to": ("SADE", "Fmax"),
             "description": (
                 "Upper bound of the mutation weighting factor range."
             ),
@@ -372,6 +374,7 @@ ALGORITHM_META = {
             "type": "float",
             "default": 0.1,
             "min": 0.0, "max": 1.0, "step": 0.05,
+            "maps_to": ("SADE", "CRmin"),
             "description": (
                 "Lower bound of the crossover rate range."
             ),
@@ -383,6 +386,7 @@ ALGORITHM_META = {
             "type": "float",
             "default": 0.9,
             "min": 0.0, "max": 1.0, "step": 0.05,
+            "maps_to": ("SADE", "CRmax"),
             "description": (
                 "Upper bound of the crossover rate range."
             ),
@@ -393,6 +397,7 @@ ALGORITHM_META = {
             "display_name": "Convergence-based stop",
             "type": "bool",
             "default": True,
+            "maps_to": ("SADE", "UseConvergence"),
             "description": (
                 "Stop the run when Cv falls below the tolerance."
             ),
@@ -404,9 +409,14 @@ ALGORITHM_META = {
             "type": "float",
             "default": 1e-6,
             "min": 1e-9, "max": 1e-3, "step": 1e-7,
+            "widget": "select_slider",
+            "options": [1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3],
+            "depends_on": ["sade_conv_input", True],
+            "maps_to": ("SADE", "Tol"),
             "description": (
                 "Coefficient-of-variation threshold for the "
-                "convergence stop."
+                "convergence stop.  Only used when 'Stop when the "
+                "population converges' is enabled."
             ),
         },
         {
@@ -416,6 +426,7 @@ ALGORITHM_META = {
             "type": "int",
             "default": 300,
             "min": 0, "max": 10000, "step": 10,
+            "maps_to": ("SADE", "StagnationMax"),
             "description": (
                 "Stop after this many generations without "
                 "improvement (0 = off)."
