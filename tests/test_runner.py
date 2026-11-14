@@ -34,6 +34,7 @@ import pytest
 
 from wds_optimizer.algorithms.config import build_algorithm_config
 from wds_optimizer.algorithms.ga import GACancelled
+from wds_optimizer.algorithms.registry import ALGORITHM_REGISTRY
 from wds_optimizer.experiments.runner import (
     ExperimentResult,
     run_experiment,
@@ -91,12 +92,25 @@ def _make_fake_algo(*, cost: float = 1000.0, feasible: bool = True,
 
 def _run(problem, base_config, *, algorithms=("GA",), n_runs=1, seed=1,
          fake=None, cancel_callback=None, progress_callback=None):
-    """Run run_experiment with all four algorithm functions patched."""
+    """Run run_experiment with every algorithm's ``run`` replaced by `fake`.
+
+    Since v0.3.0, ``runner.py`` dispatches through ``ALGORITHM_REGISTRY``
+    instead of importing ``run_ga``/``run_pso``/... as module-level names.
+    The old ``patch("wds_optimizer.experiments.runner.run_ga", ...)``
+    therefore fails with AttributeError.
+
+    We patch the registry's ``run`` slots instead.  ``patch.dict``
+    mutates the dict *in place* (so the same object referenced by
+    ``runner.py`` sees the change) and restores it on exit — including
+    any entry added later (e.g. DE_suribabu_2010), so this helper keeps
+    working as more algorithms are registered.
+    """
     fake = fake or _make_fake_algo()
-    with patch("wds_optimizer.experiments.runner.run_ga", fake), \
-         patch("wds_optimizer.experiments.runner.run_pso", fake), \
-         patch("wds_optimizer.experiments.runner.run_de", fake), \
-         patch("wds_optimizer.experiments.runner.run_sade", fake):
+    patched = {
+        k: {"run": fake, "meta": v["meta"]}
+        for k, v in ALGORITHM_REGISTRY.items()
+    }
+    with patch.dict(ALGORITHM_REGISTRY, patched, clear=False):
         return run_experiment(
             problem, base_config,
             number_of_runs=n_runs,
