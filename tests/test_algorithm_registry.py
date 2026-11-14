@@ -103,6 +103,7 @@ def test_register_rejects_mismatched_short_id():
                 "display_name": "X", "category": "X",
                 "paper_faithful": False, "description": "X",
                 "references": [], "params": [],
+                "constraint_policy": "deb_prefers",
             },
         )
 
@@ -116,6 +117,7 @@ def test_register_rejects_unknown_param_type():
                 "display_name": "Fake", "category": "X",
                 "paper_faithful": False, "description": "X",
                 "references": [],
+                "constraint_policy": "deb_prefers",
                 "params": [{
                     "key": "x", "name": "x", "display_name": "x",
                     "type": "unknown", "default": 0, "description": "x",
@@ -124,6 +126,7 @@ def test_register_rejects_unknown_param_type():
         )
 
 def test_register_rejects_missing_constraint_policy():
+    """A META without constraint_policy must be rejected at register()."""
     with pytest.raises(ValueError, match="missing required key"):
         register(
             "FAKE", run=lambda *a, **k: None,
@@ -138,6 +141,7 @@ def test_register_rejects_missing_constraint_policy():
 
 
 def test_register_rejects_unknown_constraint_policy():
+    """A META referencing an unregistered policy must be rejected."""
     with pytest.raises(ValueError, match="is not a registered policy"):
         register(
             "FAKE", run=lambda *a, **k: None,
