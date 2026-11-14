@@ -125,14 +125,38 @@ def run_de_suribabu_2010(
     ProgressInterval = max(1, MaxGen // 50)
     ProgressFailed = False
 
-    # ---- Initial population (Eq. 7): continuous uniform in [0, ND-1] ----
+    # ---- Initial population (Eq. 7) with feasible seed ----
+    # Paper's Eq. 7: uniform random in [L, U].  We additionally seed
+    # column 0 with the all-max-diameter design, which is guaranteed
+    # feasible for any WDS where larger pipes do not decrease pressure
+    # (true for any standard gravity-fed or pumped network: bigger
+    # pipes = less head loss = higher pressure).
+    #
+    # Why the seed is required:
+    # The paper's fixed penalty (Eq. 4) makes ALL infeasible designs
+    # comparable only by cost, not by how far they are from
+    # feasibility.  Without a feasible anchor, the population drifts
+    # toward cheaper designs (smaller pipes), which are *further*
+    # from feasibility, not closer.  A single feasible seed breaks
+    # this symmetry: its effective_cost (= actual cost, no penalty)
+    # is strictly below every infeasible design's effective_cost
+    # (= actual cost + penalty), so it survives every generation and
+    # is progressively improved by mutation.
+    #
+    # This is documented as a deviation in ALGORITHM_META['notes'].
     X = rng.uniform(0.0, float(ND - 1), size=(NVar, NP))
+    X[:, 0] = float(ND - 1)             # all-max seed
+
     X_discrete = _discretize(X, ND)
     cost, viol, feas = evaluate_population(X_discrete, problem, cache)
     n_evals += NP
 
-    # Paper's Eq. 4: infeasible → max_cost
-    eff = np.where(feas, cost, max_cost)
+    # Paper's Eq. 4 (our reading): "A penalty value will be added ...
+    # taken as the cost of the network forming links with maximum pipe
+    # size."  Penalty = max_cost, ADDED to actual cost.  So:
+    #     feasible   → eff = cost
+    #     infeasible → eff = cost + max_cost
+    eff = np.where(feas, cost, cost + max_cost)
 
     # ---- Track best feasible and best infeasible ----
     best_feasible_cost = float("inf")
@@ -204,7 +228,7 @@ def run_de_suribabu_2010(
             U_discrete, problem, cache,
         )
         n_evals += NP
-        eff_t = np.where(feas_t, cost_t, max_cost)
+        eff_t = np.where(feas_t, cost_t, cost_t + max_cost)
 
         # ---- selection: greedy on effective cost, ties to trial (Eq. 9) ----
         improve = eff_t <= eff
@@ -297,11 +321,18 @@ ALGORITHM_META = {
         "TR-95-012, ICSI, Berkeley, CA.",
     ],
     "notes": (
-        "Strategy is fixed at rand/1/bin; DEConfig.Strategy is "
-        "ignored.  Infeasible designs collapse to a single effective "
-        "cost (paper's fixed-penalty rule), which can reduce diversity "
-        "in the early generations.  Reported success rates in the "
-        "paper are 40-70% per trial depending on settings."
+        "Two documented deviations from a literal reading of the "
+        "paper. (1) The initial population seeds one all-max-diameter "
+        "design (guaranteed feasible), because the paper's fixed-"
+        "penalty rule causes the population to drift toward cheaper "
+        "designs (smaller pipes, further from feasibility) unless a "
+        "feasible anchor exists. (2) The penalty is applied as "
+        "actual_cost + max_cost (the paper's wording 'a penalty value "
+        "will be added'), not as max_cost alone. Both preserve the "
+        "paper's core mechanisms: DE/rand/1/bin, binomial crossover "
+        "without jrand, greedy selection on effective cost, and clip "
+        "bounds. Reported success rates in the paper are 20-70% per "
+        "trial depending on network and settings."
     ),
     "params": [
         {
