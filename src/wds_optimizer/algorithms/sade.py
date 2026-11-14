@@ -317,3 +317,108 @@ def run_sade(problem, config,
     full_position[problem["VariablePipes"]] = problem["D"][GlobalSol]
 
     return GlobalCost, full_position, Conv[: last_G + 1], GlobalViol == 0.0
+
+ALGORITHM_META = {
+    "short_id": "SADE",
+    "display_name": "SADE",
+    "category": "Differential Evolution",
+    "paper_faithful": True,
+    "description": (
+        "Self-adaptive DE (Zheng, Zecchin & Simpson 2013): F and CR "
+        "encoded in every individual and self-adapted by evolution, "
+        "DE/rand/1/bin mutation, binomial crossover with jrand, "
+        "Deb's constraint tournament, and coefficient-of-variation "
+        "termination on feasible members."
+    ),
+    "references": [
+        "Zheng, F., Zecchin, A. C., and Simpson, A. R. (2013). "
+        "\"A self-adaptive differential evolution algorithm applied "
+        "to water distribution system optimization.\" Journal of "
+        "Computing in Civil Engineering, 27(2), 148-158.",
+    ],
+    "notes": (
+        "Faithful reproduction of Zheng et al. (2013), with one "
+        "addition: a StagnationMax safeguard.  The paper relies "
+        "only on Cv < Tol to terminate."
+    ),
+    "params": [
+        {
+            "key": "sade_fmin",
+            "name": "Fmin",
+            "display_name": "F minimum",
+            "type": "float",
+            "default": 0.1,
+            "min": 0.0, "max": 2.0, "step": 0.05,
+            "description": (
+                "Lower bound of the mutation weighting factor range."
+            ),
+        },
+        {
+            "key": "sade_fmax",
+            "name": "Fmax",
+            "display_name": "F maximum",
+            "type": "float",
+            "default": 0.9,
+            "min": 0.0, "max": 2.0, "step": 0.05,
+            "description": (
+                "Upper bound of the mutation weighting factor range."
+            ),
+        },
+        {
+            "key": "sade_crmin",
+            "name": "CRmin",
+            "display_name": "CR minimum",
+            "type": "float",
+            "default": 0.1,
+            "min": 0.0, "max": 1.0, "step": 0.05,
+            "description": (
+                "Lower bound of the crossover rate range."
+            ),
+        },
+        {
+            "key": "sade_crmax",
+            "name": "CRmax",
+            "display_name": "CR maximum",
+            "type": "float",
+            "default": 0.9,
+            "min": 0.0, "max": 1.0, "step": 0.05,
+            "description": (
+                "Upper bound of the crossover rate range."
+            ),
+        },
+        {
+            "key": "sade_conv",
+            "name": "UseConvergence",
+            "display_name": "Convergence-based stop",
+            "type": "bool",
+            "default": True,
+            "description": (
+                "Stop the run when Cv falls below the tolerance."
+            ),
+        },
+        {
+            "key": "sade_tol",
+            "name": "Tol",
+            "display_name": "Cv tolerance",
+            "type": "float",
+            "default": 1e-6,
+            "min": 1e-9, "max": 1e-3, "step": 1e-7,
+            "description": (
+                "Coefficient-of-variation threshold for the "
+                "convergence stop."
+            ),
+        },
+        {
+            "key": "sade_stag",
+            "name": "StagnationMax",
+            "display_name": "Stagnation safeguard",
+            "type": "int",
+            "default": 300,
+            "min": 0, "max": 10000, "step": 10,
+            "description": (
+                "Stop after this many generations without "
+                "improvement (0 = off)."
+            ),
+        },
+    ],
+}

@@ -217,3 +217,61 @@ def run_pso(problem, config,
     full_position[problem["VariablePipes"]] = problem["D"][BestX]
 
     return BestCost, full_position, Conv, BestViol == 0.0
+
+ALGORITHM_META = {
+    "short_id": "PSO",
+    "display_name": "PSO",
+    "category": "Particle Swarm Optimization",
+    "paper_faithful": False,
+    "description": (
+        "Standard global-best PSO with constant inertia weight, "
+        "cognitive/social coefficients, and no velocity clamping."
+    ),
+    "references": [
+        "Kennedy, J., and Eberhart, R. (1995). \"Particle swarm "
+        "optimization.\" Proceedings of ICNN'95, Perth.",
+        "Suribabu & Neelakantan (2006) informed parameter guidance; "
+        "see docs/algorithms.md.",
+    ],
+    "notes": (
+        "NOT a faithful reproduction of Suribabu & Neelakantan "
+        "(2006), which uses decreasing inertia weight and velocity "
+        "clamping.  See docs/algorithms.md."
+    ),
+    "params": [
+        {
+            "key": "pso_w",
+            "name": "w",
+            "display_name": "Inertia weight (w)",
+            "type": "float",
+            "default": 0.7,
+            "min": 0.0, "max": 2.0, "step": 0.05,
+            "description": (
+                "Momentum coefficient; keeps particles moving in "
+                "their current direction."
+            ),
+        },
+        {
+            "key": "pso_c1",
+            "name": "c1",
+            "display_name": "Cognitive coefficient (c1)",
+            "type": "float",
+            "default": 1.5,
+            "min": 0.0, "max": 3.0, "step": 0.1,
+            "description": (
+                "Pull toward the particle's own best position."
+            ),
+        },
+        {
+            "key": "pso_c2",
+            "name": "c2",
+            "display_name": "Social coefficient (c2)",
+            "type": "float",
+            "default": 1.5,
+            "min": 0.0, "max": 3.0, "step": 0.1,
+            "description": (
+                "Pull toward the swarm's global best position."
+            ),
+        },
+    ],
+}

@@ -239,3 +239,68 @@ def run_ga(problem, config,
     full_position[problem["VariablePipes"]] = problem["D"][GlobalSol]
 
     return GlobalCost, full_position, Conv, GlobalViol == 0.0
+
+# =====================================================================
+#  Algorithm metadata (consumed by the GUI, CLI, and plugin system)
+# =====================================================================
+
+ALGORITHM_META = {
+    "short_id": "GA",
+    "display_name": "GA",
+    "category": "Genetic Algorithm",
+    "paper_faithful": False,
+    "description": (
+        "Standard integer-coded GA with tournament or roulette "
+        "selection, one-point crossover, uniform-reset mutation, "
+        "and one elite."
+    ),
+    "references": [
+        "Holland, J. H. (1975). Adaptation in Natural and Artificial "
+        "Systems. University of Michigan Press.",
+        "Goldberg, D. E. (1989). Genetic Algorithms in Search, "
+        "Optimization and Machine Learning. Addison-Wesley.",
+        "Simpson, Dandy & Murphy (1994) is the closest published "
+        "Simple-GA benchmark reference; see docs/algorithms.md.",
+    ],
+    "notes": (
+        "NOT a faithful reproduction of Simpson et al. (1994) "
+        "(binary coding + bitwise mutation) or Dandy et al. (1996) "
+        "(adds Gray codes + adjacency mutation + variable power "
+        "scaling).  Uses integer coding and uniform-reset mutation. "
+        "See docs/algorithms.md."
+    ),
+    "params": [
+        {
+            "key": "ga_pc",
+            "name": "Pc",
+            "display_name": "Crossover probability (Pc)",
+            "type": "float",
+            "default": 0.8,
+            "min": 0.0, "max": 1.0, "step": 0.05,
+            "description": (
+                "Probability that a mating pair undergoes crossover."
+            ),
+        },
+        {
+            "key": "ga_pm",
+            "name": "Pm",
+            "display_name": "Mutation probability (Pm)",
+            "type": "float",
+            "default": 0.03,
+            "min": 0.0, "max": 1.0, "step": 0.01,
+            "description": (
+                "Per-gene probability of resetting to a random "
+                "diameter index."
+            ),
+        },
+        {
+            "key": "ga_sel",
+            "name": "Selection",
+            "display_name": "Selection scheme",
+            "type": "choice",
+            "default": "tournament",
+            "choices": ["tournament", "roulette"],
+            "description": "Parent selection operator.",
+        },
+    ],
+}

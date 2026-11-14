@@ -242,3 +242,65 @@ def run_de(problem, config,
     full_position[problem["VariablePipes"]] = problem["D"][GlobalSol]
 
     return GlobalCost, full_position, Conv, GlobalViol == 0.0
+
+ALGORITHM_META = {
+    "short_id": "DE",
+    "display_name": "DE",
+    "category": "Differential Evolution",
+    "paper_faithful": False,
+    "description": (
+        "Standard DE/rand/1/bin with Deb's constraint tournament "
+        "(feasible-first, cost-second) and re-draw bound handling. "
+        "Three mutation strategies available."
+    ),
+    "references": [
+        "Storn, R., and Price, K. (1995). \"Differential Evolution - "
+        "A Simple and Efficient Adaptive Scheme for Global "
+        "Optimization over Continuous Space.\" Technical Report "
+        "TR-95-012, ICSI, Berkeley, CA.",
+        "Suribabu (2010) informed parameter guidance (F=0.5, CR=0.3).",
+    ],
+    "notes": (
+        "NOT a faithful reproduction of Suribabu (2010).  Uses "
+        "Deb's constraint tournament instead of the paper's fixed "
+        "penalty; re-draw bound handling instead of clip; supports "
+        "three mutation strategies while the paper only uses "
+        "rand/1/bin.  For a paper-faithful DE, use DE_suribabu_2010."
+    ),
+    "params": [
+        {
+            "key": "de_f",
+            "name": "F",
+            "display_name": "Differential weight (F)",
+            "type": "float",
+            "default": 0.5,
+            "min": 0.0, "max": 2.0, "step": 0.05,
+            "description": (
+                "Scale applied to the differential vector in mutation."
+            ),
+        },
+        {
+            "key": "de_cr",
+            "name": "CR",
+            "display_name": "Crossover rate (CR)",
+            "type": "float",
+            "default": 0.3,
+            "min": 0.0, "max": 1.0, "step": 0.05,
+            "description": (
+                "Probability that each gene is taken from the mutant. "
+                "Low values suit separable problems such as pipe "
+                "sizing; try a DE_CR sweep."
+            ),
+        },
+        {
+            "key": "de_strategy",
+            "name": "Strategy",
+            "display_name": "Mutation strategy",
+            "type": "choice",
+            "default": "rand/1/bin",
+            "choices": ["rand/1/bin", "best/1/bin",
+                        "current-to-best/1/bin"],
+            "description": "DE mutation scheme.",
+        },
+    ],
+}
