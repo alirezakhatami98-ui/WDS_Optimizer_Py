@@ -141,3 +141,14 @@ register("GA",   run=run_ga,   meta=GA_META)
 register("PSO",  run=run_pso,  meta=PSO_META)
 register("DE",   run=run_de,   meta=DE_META)
 register("SADE", run=run_sade, meta=SADE_META)
+
+# Paper-faithful variants (v0.3)
+from .de_suribabu_2010 import (  # noqa: E402
+    ALGORITHM_META as DE_SURIBABU_META,
+    run_de_suribabu_2010,
+)
+register(
+    "DE_suribabu_2010",
+    run=run_de_suribabu_2010,
+    meta=DE_SURIBABU_META,
+)

@@ -41,6 +41,7 @@ from typing import Sequence
 
 import numpy as np
 
+from wds_optimizer.algorithms.registry import list_algorithms
 from wds_optimizer.api import (
     OptimizationRequest,
     OptimizationResult,
@@ -625,7 +626,7 @@ def cmd_benchmark(args) -> int:
 def _add_common_algo_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--algo", action="append",
-        choices=["GA", "PSO", "DE", "SADE"],
+        choices=list_algorithms(),
         help="Algorithm(s) to run; repeat for multiple (default GA).",
     )
     p.add_argument("--n-runs", type=int, default=1,

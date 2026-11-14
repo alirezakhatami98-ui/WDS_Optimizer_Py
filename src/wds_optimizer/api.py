@@ -45,6 +45,7 @@ from wds_optimizer.algorithms.config import (
     SADEConfig,
     build_algorithm_config,
 )
+from wds_optimizer.algorithms.registry import ALGORITHM_REGISTRY
 from wds_optimizer.data.loaders import load_optimization_data
 from wds_optimizer.experiments.runner import (
     ExperimentResult, run_experiment, summarize_experiment,
@@ -322,11 +323,11 @@ class OptimizationRequest:
         if not self.algorithms:
             raise ValueError("specify at least one algorithm")
 
-        valid_algos = {"GA", "PSO", "DE", "SADE"}
+        valid_algos = set(ALGORITHM_REGISTRY)
         for a in self.algorithms:
             if a not in valid_algos:
                 raise ValueError(
-                    f"unknown algorithm {a!r}; expected one of "
+                    f"unknown algorithm {a!r}; available: "
                     f"{sorted(valid_algos)}"
                 )
 

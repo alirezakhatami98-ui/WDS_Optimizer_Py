@@ -7,10 +7,11 @@ from typing import Callable, Optional
 import numpy as np
 
 from ..algorithms.config import AlgorithmConfig, build_algorithm_config
-from ..algorithms.ga import GACancelled, run_ga
-from ..algorithms.pso import PSOCancelled, run_pso
-from ..algorithms.de import DECancelled, run_de
-from ..algorithms.sade import SADECancelled, run_sade
+from ..algorithms.ga import GACancelled
+from ..algorithms.pso import PSOCancelled
+from ..algorithms.de import DECancelled
+from ..algorithms.sade import SADECancelled
+from ..algorithms.registry import ALGORITHM_REGISTRY
 
 
 @dataclass
@@ -84,17 +85,21 @@ def run_experiment(
         NS, MaxGen, GA/PSO parameters.
     number_of_runs : int
     algorithms : list[str]
-        Subset of ``["GA", "PSO", "DE", "SADE"]``.
+        Algorithm registry keys (see algorithms.registry).  Built-in
+        keys include GA, PSO, DE, SADE, DE_suribabu_2010.
     experiment_seed : int
     progress_callback : callable(info), optional
         Forwarded to each algorithm. ``info`` gains ``RunIndex``,
         ``NumberOfRuns``, ``RunLabel``, ``Algorithm``.
     cancel_callback : callable() -> bool, optional
     """
-    # Normalize and order: GA, PSO, DE, SADE
-    selected = [a for a in ("GA", "PSO", "DE", "SADE") if a in algorithms]
+    # Normalize and order per registry insertion order (stable).
+    selected = [a for a in ALGORITHM_REGISTRY if a in algorithms]
     if not selected:
-        raise ValueError("At least one of GA/PSO/DE/SADE must be selected.")
+        raise ValueError(
+            f"At least one algorithm must be selected.  "
+            f"Available: {sorted(ALGORITHM_REGISTRY)}"
+        )
 
     # Generate per-run seeds (unique)
     rng = np.random.default_rng(experiment_seed)
@@ -176,8 +181,7 @@ def run_experiment(
             meta = {}                      # filled by the algorithm
             t0 = time.perf_counter()
             try:
-                algo_fn = {"GA": run_ga, "PSO": run_pso, "DE": run_de,
-                           "SADE": run_sade}[algo]
+                algo_fn = ALGORITHM_REGISTRY[algo]["run"]
                 score, pos, conv, feas = algo_fn(
                     problem, cfg,
                     progress_callback=per_run_cb,
