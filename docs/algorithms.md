@@ -9,7 +9,6 @@ There are two categories:
 | Algorithm | Category | Paper-faithful? |
 |-----------|----------|------------------|
 | **SADE**             | Paper-faithful reproduction | ✅ Yes — Zheng et al. (2013) |
-| **DE_suribabu_2010** | Paper-faithful reproduction | ✅ Yes — Suribabu (2010) |
 | **DE**               | Standard textbook algorithm | ⚠️ No — general DE formulation |
 | **PSO**              | Standard textbook algorithm | ⚠️ No — general PSO formulation |
 | **GA**               | Standard textbook algorithm | ⚠️ No — general GA formulation |
@@ -84,69 +83,6 @@ paper-reproduction of Suribabu 2010.
 DE reaches the known optimum exactly on two-loop.  The +4.8% gap on
 Hanoi is consistent with standard DE at the given budget (NS=200,
 MaxGen=300, three seeds).
-
----
-
-## DE_suribabu_2010 — Differential Evolution (paper-faithful)
-
-**Reference.** Suribabu, C. R. (2010). "Differential evolution
-algorithm for optimal design of water distribution networks."
-*Journal of Hydroinformatics*, 12(1), 66-82.
-
-**Implementation status: paper-faithful.**  Every mechanism from the
-paper is implemented as described:
-
-- **Mutation**: DE/rand/1 only (Eq. 8).  No strategy choice.
-- **Crossover**: binomial, **no jrand** (Eq. 8).  The paper does not
-  force at least one gene from the mutant, so with probability
-  `(1 - CR)^NVar` a trial can be an exact copy of its target.
-- **Constraint handling**: fixed penalty (Eq. 4 of the Application
-  section).  Infeasible designs get
-  `effective_cost = cost of all variable pipes at max diameter`
-  (a constant).  Any feasible design beats any infeasible one.
-- **Selection**: simple greedy (Eq. 9).  The trial replaces its
-  target iff `effective_cost(trial) <= effective_cost(target)`.
-  Ties go to the trial.  NOT Deb's constraint tournament.
-- **Bound handling**: clip to `[0, ND-1]`, then round to the
-  nearest integer for evaluation.  Not re-draw.
-- **No restart-on-stagnation.**  Not in the paper.
-
-**Recommended parameters** (from the paper's Table 2 and Table 6):
-
-| Parameter | Value | Paper reference |
-|-----------|-------|-----------------|
-| F  | 0.8 | Table 2, trial 2 (two-loop) / Table 6, trial 2 (Hanoi) |
-| CR | 0.4 | same |
-| NS | 20  | Main runs in the paper |
-| MaxGen | 500 | Paper's fixed generation budget |
-
-The paper reports that larger populations (NS=100) with more
-generations (MaxGen=1000) substantially improve the success rate
-to reach the published optimum, at the cost of more function
-evaluations.
-
-**Verified performance.**  See
-`tests/test_de_suribabu_2010.py::test_de_suribabu_2010_hanoi_paper_settings`
-and
-`tests/test_de_suribabu_2010.py::test_de_suribabu_2010_twoloop_paper_settings`.
-
-| Benchmark | Best | Paper best | Gap |
-|-----------|------|------------|-----|
-| Hanoi     | (verified by test) | $6.081M | ≤ 2% |
-| Two-loop  | (verified by test) | $419,000 | ≤ 1% |
-
-Run-to-run variance is higher than the standard `DE` because the
-paper's mechanisms (no jrand, fixed penalty) reduce diversity.  The
-paper itself reports 40-70% success rates per trial depending on the
-parameter combination; that is why verification uses paper's high-
-setting run (NS=100, MaxGen=1000) rather than the main (NS=20) runs.
-
-**When to use this instead of `DE`.**  When you specifically want to
-reproduce Suribabu (2010), or when you want a DE variant whose
-mechanisms match a published paper exactly for a research comparison.
-For general-purpose DE, the standard `DE` in this project typically
-performs slightly better because Deb's tournament handles constraints
-more gracefully than fixed penalty.
 
 ---
 
@@ -258,12 +194,10 @@ sidebar and in `RestartConfig` for CLI/API users.
 
 ## Roadmap: paper-faithful presets (v0.3)
 
-**Completed:**
-- ✅ **DE_suribabu_2010** — Differential Evolution (Suribabu 2010)
-  in v0.3.0.
-
 **Planned:**
 
+- ⏳ **DE_suribabu_2010** — Differential Evolution (Suribabu 2010)
+  in v0.3.0.
 - ⏳ **PSO_suribabu_2006** — PSO with decreasing inertia weight and
   velocity clamping (Suribabu & Neelakantan 2006), v0.3.1.
 - ⏳ **GA_simpson_1994** — Simple GA with binary coding and bitwise
