@@ -2,8 +2,8 @@
 
 import numpy as np
 
-from .compare import is_better_solution
 from ..optimization.evaluate import evaluate_population
+from ..optimization.policies import deb_prefers
 
 class PSOCancelled(Exception):
     """Raised when PSO is cancelled.
@@ -141,7 +141,7 @@ def run_pso(problem, config,
                     GBestViol = viol[i]
                     GBestX = X_discrete[:, i].copy()
 
-        epoch_improved = is_better_solution(
+        epoch_improved = deb_prefers(
             GBestCost, GBestViol, prev_gbest[0], prev_gbest[1]
         )
 
@@ -157,7 +157,7 @@ def run_pso(problem, config,
             X[:, i] = X[:, i] + V[:, i]
 
         # ---- best over restarts ----
-        if is_better_solution(GBestCost, GBestViol, BestCost, BestViol):
+        if deb_prefers(GBestCost, GBestViol, BestCost, BestViol):
             BestX = GBestX.copy() if GBestX is not None else None
             BestCost, BestViol = GBestCost, GBestViol
             nfe_best = n_evals
@@ -238,6 +238,7 @@ ALGORITHM_META = {
         "(2006), which uses decreasing inertia weight and velocity "
         "clamping.  See docs/algorithms.md."
     ),
+    "constraint_policy": "deb_prefers",
     "params": [
         {
             "key": "pso_w",
@@ -272,6 +273,7 @@ ALGORITHM_META = {
             "description": (
                 "Pull toward the swarm's global best position."
             ),
+            "constraint_policy": "deb_prefers",
         },
     ],
 }

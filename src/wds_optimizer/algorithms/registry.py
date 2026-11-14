@@ -30,11 +30,13 @@ from .ga import ALGORITHM_META as GA_META, run_ga
 from .pso import ALGORITHM_META as PSO_META, run_pso
 from .de import ALGORITHM_META as DE_META, run_de
 from .sade import ALGORITHM_META as SADE_META, run_sade
+from ..optimization.policies import CONSTRAINT_POLICIES
 
 
 _REQUIRED_META_KEYS = (
     "short_id", "display_name", "category", "paper_faithful",
     "description", "references", "params",
+    "constraint_policy",
 )
 _REQUIRED_PARAM_KEYS = (
     "key", "name", "display_name", "type", "default", "description",
@@ -94,6 +96,20 @@ def _validate_meta(meta: dict) -> None:
             )
         seen_keys.add(p["key"])
 
+    # ---- NEW: validate constraint_policy (still inside the function,
+    # at the end, after basic/param validation) ----
+    policy = meta["constraint_policy"]
+    if not isinstance(policy, str):
+        raise ValueError(
+            f"ALGORITHM_META[{meta['short_id']!r}].constraint_policy "
+            f"must be a string (policy short name), got {type(policy)}"
+        )
+    if policy not in CONSTRAINT_POLICIES:
+        raise ValueError(
+            f"ALGORITHM_META[{meta['short_id']!r}].constraint_policy "
+            f"{policy!r} is not a registered policy.  "
+            f"Available: {sorted(CONSTRAINT_POLICIES)}"
+        )
 
 ALGORITHM_REGISTRY: dict[str, dict] = {}
 

@@ -37,9 +37,9 @@ convergence triggers a restart instead of ending the run.
 
 import numpy as np
 
-from .compare import is_better_solution
 from .de import _best_index, _discretize
 from ..optimization.evaluate import evaluate_population
+from ..optimization.policies import deb_prefers
 
 
 class SADECancelled(Exception):
@@ -200,7 +200,7 @@ def run_sade(problem, config,
         n_evals += NP
         success = np.zeros(NP, dtype=bool)
         for i in range(NP):
-            success[i] = not is_better_solution(
+            success[i] = not deb_prefers(
                 cost[i], viol[i], cost_t[i], viol_t[i])
         X[:, success] = U[:, success]
         cost[success] = cost_t[success]
@@ -234,10 +234,10 @@ def run_sade(problem, config,
         # ---- update epoch / global bests ----
         epoch_improved = False
         ib = _best_index(cost, viol)
-        if is_better_solution(cost[ib], viol[ib], EpochCost, EpochViol):
+        if deb_prefers(cost[ib], viol[ib], EpochCost, EpochViol):
             EpochCost, EpochViol = float(cost[ib]), float(viol[ib])
             epoch_improved = True
-            if is_better_solution(EpochCost, EpochViol,
+            if deb_prefers(EpochCost, EpochViol,
                                   GlobalCost, GlobalViol):
                 GlobalCost, GlobalViol = EpochCost, EpochViol
                 GlobalSol = _discretize(X[:, ib], ND)
@@ -272,7 +272,7 @@ def run_sade(problem, config,
             n_evals += NP
             ib = _best_index(cost, viol)
             EpochCost, EpochViol = float(cost[ib]), float(viol[ib])
-            if is_better_solution(EpochCost, EpochViol,
+            if deb_prefers(EpochCost, EpochViol,
                                   GlobalCost, GlobalViol):
                 GlobalCost, GlobalViol = EpochCost, EpochViol
                 GlobalSol = _discretize(X[:, ib], ND)
@@ -341,6 +341,7 @@ ALGORITHM_META = {
         "addition: a StagnationMax safeguard.  The paper relies "
         "only on Cv < Tol to terminate."
     ),
+    "constraint_policy": "deb_prefers",
     "params": [
         {
             "key": "sade_fmin",
@@ -419,6 +420,7 @@ ALGORITHM_META = {
                 "Stop after this many generations without "
                 "improvement (0 = off)."
             ),
+            "constraint_policy": "deb_prefers",
         },
     ],
 }

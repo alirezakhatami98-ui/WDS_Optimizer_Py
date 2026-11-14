@@ -20,6 +20,28 @@ below.
 
 ---
 
+## Constraint handling — policy library
+
+All four algorithms share a **constraint policy** — a pure function
+that says "given two designs, which is preferable?".  The policy is
+visible and swappable:
+
+| Policy | Description | Reference |
+|--------|-------------|-----------|
+| `deb_prefers` (default) | Feasible > infeasible; among feasible, cheaper wins; among infeasible, smaller violation wins. | Deb (2000), *CMAME* 186:311-338 |
+| `fixed_penalty_prefers` | Effective cost = cost + 1e9 if infeasible.  Feasible + cheap wins. | Standard penalty method |
+| `simple_cost_only_prefers` | Ignore feasibility.  Diagnostic only. | — |
+
+Each policy lives in `optimization/policies.py` with its full code
+visible in `POLICY_META`.  Users and plugin authors can:
+- pick a built-in policy by name (no code needed), or
+- write a custom policy inline in their plugin file.
+
+Algorithms in this repository currently use `deb_prefers`.  Their
+`ALGORITHM_META["constraint_policy"]` field documents this.
+
+---
+
 ## SADE — Self-Adaptive Differential Evolution
 
 **Reference.** Zheng, F., Zecchin, A. C., and Simpson, A. R. (2013).

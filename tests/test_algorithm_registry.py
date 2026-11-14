@@ -122,3 +122,30 @@ def test_register_rejects_unknown_param_type():
                 }],
             },
         )
+
+def test_register_rejects_missing_constraint_policy():
+    with pytest.raises(ValueError, match="missing required key"):
+        register(
+            "FAKE", run=lambda *a, **k: None,
+            meta={
+                "short_id": "FAKE",
+                "display_name": "Fake", "category": "X",
+                "paper_faithful": False, "description": "X",
+                "references": [], "params": [],
+                # NO constraint_policy
+            },
+        )
+
+
+def test_register_rejects_unknown_constraint_policy():
+    with pytest.raises(ValueError, match="is not a registered policy"):
+        register(
+            "FAKE", run=lambda *a, **k: None,
+            meta={
+                "short_id": "FAKE",
+                "display_name": "Fake", "category": "X",
+                "paper_faithful": False, "description": "X",
+                "references": [], "params": [],
+                "constraint_policy": "does_not_exist",
+            },
+        )

@@ -3,7 +3,7 @@
 Classic DE works on real vectors.  As in the PSO of this project, the
 population is kept as continuous positions in [0, ND-1] and rounded to the
 nearest diameter index only when a design is evaluated.  Selection uses
-Deb's feasibility rules (``is_better_solution``): a trial replaces its
+Deb's feasibility rules (``deb_prefers``): a trial replaces its
 target if it is not worse (ties are accepted, which lets the population
 drift across plateaus of equal-cost designs).
 
@@ -14,8 +14,8 @@ restart-on-stagnation mechanism (``config.Restart``).
 
 import numpy as np
 
-from .compare import is_better_solution
 from ..optimization.evaluate import evaluate_population
+from ..optimization.policies import deb_prefers
 
 DE_STRATEGIES = ("rand/1/bin", "best/1/bin", "current-to-best/1/bin")
 
@@ -168,17 +168,17 @@ def run_de(problem, config,
         )
         n_evals += NP
         for i in range(NP):
-            if not is_better_solution(cost[i], viol[i], cost_t[i], viol_t[i]):
+            if not deb_prefers(cost[i], viol[i], cost_t[i], viol_t[i]):
                 X[:, i] = U[:, i]
                 cost[i], viol[i] = cost_t[i], viol_t[i]
 
         # ---- update epoch / global bests ----
         epoch_improved = False
         ib = _best_index(cost, viol)
-        if is_better_solution(cost[ib], viol[ib], EpochCost, EpochViol):
+        if deb_prefers(cost[ib], viol[ib], EpochCost, EpochViol):
             EpochCost, EpochViol = float(cost[ib]), float(viol[ib])
             epoch_improved = True
-            if is_better_solution(EpochCost, EpochViol,
+            if deb_prefers(EpochCost, EpochViol,
                                   GlobalCost, GlobalViol):
                 GlobalCost, GlobalViol = EpochCost, EpochViol
                 GlobalSol = _discretize(X[:, ib], ND)
@@ -209,7 +209,7 @@ def run_de(problem, config,
             n_evals += NP
             ib = _best_index(cost, viol)
             EpochCost, EpochViol = float(cost[ib]), float(viol[ib])
-            if is_better_solution(EpochCost, EpochViol,
+            if deb_prefers(EpochCost, EpochViol,
                                   GlobalCost, GlobalViol):
                 GlobalCost, GlobalViol = EpochCost, EpochViol
                 GlobalSol = _discretize(X[:, ib], ND)
@@ -265,8 +265,9 @@ ALGORITHM_META = {
         "Deb's constraint tournament instead of the paper's fixed "
         "penalty; re-draw bound handling instead of clip; supports "
         "three mutation strategies while the paper only uses "
-        "rand/1/bin.  For a paper-faithful DE, use DE_suribabu_2010."
+        "rand/1/bin."
     ),
+    "constraint_policy": "deb_prefers",
     "params": [
         {
             "key": "de_f",
@@ -301,6 +302,7 @@ ALGORITHM_META = {
             "choices": ["rand/1/bin", "best/1/bin",
                         "current-to-best/1/bin"],
             "description": "DE mutation scheme.",
+            "constraint_policy": "deb_prefers",
         },
     ],
 }

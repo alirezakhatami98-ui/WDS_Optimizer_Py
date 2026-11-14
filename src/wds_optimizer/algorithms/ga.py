@@ -2,10 +2,40 @@
 
 import numpy as np
 
-from .compare import is_better_solution
-from .selection import selection_roulette, selection_tournament
 from ..optimization.evaluate import evaluate_population
-from ..optimization.fitness import calculate_fitness
+from ..optimization.policies import deb_prefers
+
+# =====================================================================
+#  GA-internal helpers (previously in separate modules)
+# =====================================================================
+
+def selection_tournament(cost, viol, n_select, k, rng):
+    """Tournament selection with Deb's rules."""
+    N = len(cost)
+    idx = np.zeros(n_select, dtype=int)
+    for s in range(n_select):
+        cand = rng.integers(0, N, size=k)
+        best = int(cand[0])
+        for j in range(1, k):
+            cj = int(cand[j])
+            if deb_prefers(
+                cost[cj], viol[cj], cost[best], viol[best]
+            ):
+                best = cj
+        idx[s] = best
+    return idx
+
+
+def selection_roulette(fitness, n_select, rng):
+    """Standard roulette-wheel selection with replacement."""
+    prob = fitness / fitness.sum()
+    cum = np.cumsum(prob)
+    r = rng.random(n_select)
+    return np.clip(np.searchsorted(cum, r, side="left"), 0, len(cum) - 1)
+
+
+def calculate_fitness(cost, viol):
+    return 1.0 / (np.asarray(cost) + 2e6 * np.asarray(viol) ** 2 + 1e-6)
 
 class GACancelled(Exception):
     """Raised when the GA is cancelled via cancel_callback.
@@ -175,7 +205,7 @@ def run_ga(problem, config,
         else:
             eCost, eViol = BestUnfCost, BestViolEver
 
-        if is_better_solution(eCost, eViol, GlobalCost, GlobalViol):
+        if deb_prefers(eCost, eViol, GlobalCost, GlobalViol):
             GlobalSol = (
                 BestSolEver if BestSolEver is not None else BestUnfSol
             ).copy()
@@ -269,6 +299,7 @@ ALGORITHM_META = {
         "scaling).  Uses integer coding and uniform-reset mutation. "
         "See docs/algorithms.md."
     ),
+    "constraint_policy": "deb_prefers",
     "params": [
         {
             "key": "ga_pc",
@@ -301,6 +332,7 @@ ALGORITHM_META = {
             "default": "tournament",
             "choices": ["tournament", "roulette"],
             "description": "Parent selection operator.",
+            "constraint_policy": "deb_prefers",
         },
     ],
 }
