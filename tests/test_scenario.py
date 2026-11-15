@@ -89,6 +89,15 @@ def test_new_scenario_deep_copies_dicts(tmp_path):
     assert sc.constraints["Pmin"]["value"] == 30.0
     assert sc.algorithm_params["GA"]["ga_pc"] == 0.8
 
+def test_to_dict_returns_isolated_copy(tmp_path):
+    """to_dict must not leak references to the scenario's internals."""
+    from wds_optimizer.scenario import to_dict
+    sc = _make_scenario(tmp_path)
+    data = to_dict(sc, embed_inputs=False)
+    data["scenario"]["constraints"]["Pmin"]["value"] = 999
+    data["scenario"]["algorithm_params"]["GA"]["ga_pc"] = 0.0
+    assert sc.constraints["Pmin"]["value"] == 30.0
+    assert sc.algorithm_params["GA"]["ga_pc"] == 0.8
 
 def test_clone_has_different_id_and_no_result(tmp_path):
     sc = _make_scenario(tmp_path)

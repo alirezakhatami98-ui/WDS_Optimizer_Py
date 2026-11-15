@@ -36,9 +36,10 @@ Public surface
 """
 from __future__ import annotations
 
+import copy
 import json
 import uuid
-from dataclasses import asdict, dataclass, field, field as dc_field
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -117,8 +118,8 @@ def new_scenario(
         seed=int(seed),
         ns=int(ns),
         max_gen=int(max_gen),
-        constraints=dict(constraints),
-        algorithm_params={k: dict(v) for k, v in algorithm_params.items()},
+        constraints=copy.deepcopy(constraints),
+        algorithm_params=copy.deepcopy(algorithm_params),
         constraint_policy=constraint_policy,
         fixed_pipes=fixed_pipes,
     )
@@ -143,8 +144,8 @@ def clone_scenario(sc: Scenario, new_name: str) -> Scenario:
         seed=sc.seed,
         ns=sc.ns,
         max_gen=sc.max_gen,
-        constraints={k: dict(v) for k, v in sc.constraints.items()},
-        algorithm_params={k: dict(v) for k, v in sc.algorithm_params.items()},
+        constraints=copy.deepcopy(sc.constraints),
+        algorithm_params=copy.deepcopy(sc.algorithm_params),
         constraint_policy=sc.constraint_policy,
         fixed_pipes=sc.fixed_pipes,
     )
@@ -188,8 +189,8 @@ def to_dict(sc: Scenario, *, embed_inputs: bool = True) -> dict:
             "seed": sc.seed,
             "ns": sc.ns,
             "max_gen": sc.max_gen,
-            "constraints": sc.constraints,
-            "algorithm_params": sc.algorithm_params,
+            "constraints": copy.deepcopy(sc.constraints),
+            "algorithm_params": copy.deepcopy(sc.algorithm_params),
             "constraint_policy": sc.constraint_policy,
             "fixed_pipes": sc.fixed_pipes,
             "status": sc.status,
