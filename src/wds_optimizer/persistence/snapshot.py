@@ -116,7 +116,10 @@ def build_snapshot(
             "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
             "de_f", "de_cr", "de_strategy",
             "sade_fmin", "sade_fmax", "sade_crmin", "sade_crmax",
-            "sade_conv", "sade_tol",
+            "sade_conv", "sade_tol", "sade_stag",
+            "rs_enabled", "rs_patience", "rs_max", "rs_keep_best",
+            "rs_mode", "rs_perturb",
+            "constraint_policy",   # ← NEW
         )},
         "problem": {
             "pipe_names":     list(problem_snapshot["pipe_names"]),
@@ -212,6 +215,11 @@ def restore_experiment(data: dict) -> ExperimentResult:
         use_pmax=bool(data["problem"].get("use_pmax", False)),
         use_vmin=bool(data["problem"].get("use_vmin", False)),
         use_vmax=bool(data["problem"].get("use_vmax", True)),
+        constraint_policy=(
+            exp.get("constraint_policy")
+            or data.get("config", {}).get("constraint_policy")
+            or "deb_prefers"
+        ),
     )
     for algo, runs in exp["runs"].items():
         result.runs[algo] = [_dict_to_run(r) for r in runs]

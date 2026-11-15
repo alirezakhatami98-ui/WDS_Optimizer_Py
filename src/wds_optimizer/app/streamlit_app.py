@@ -42,6 +42,9 @@ from wds_optimizer.algorithms.config import build_algorithm_config
 from wds_optimizer.algorithms.registry import (
     ALGORITHM_REGISTRY, list_algorithms,
 )
+from wds_optimizer.optimization.policies import (
+    CONSTRAINT_POLICIES, POLICY_META,
+)
 from wds_optimizer.api import _parse_network, build_problem
 from wds_optimizer.experiments.runner import (
     ExperimentResult,
@@ -252,6 +255,7 @@ def _init_widget_state():
         "n_runs_input":      int(st.session_state.get("n_runs", 3)),
         "exp_seed_input":    int(st.session_state.get("exp_seed", 1)),
         "algo_input":        ["GA"],
+        "constraint_policy_input": "deb_prefers",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -429,7 +433,33 @@ def _render_sidebar():
 
         st.divider()
         st.header("3. Algorithm")
-        # Algorithm
+
+        # Constraint-handling policy (applies to every selected algorithm)
+        st.subheader("Constraint handling")
+        _policy_names = list(CONSTRAINT_POLICIES)
+        _current_policy = st.session_state.get(
+            "constraint_policy_input", "deb_prefers",
+        )
+        _idx = (_policy_names.index(_current_policy)
+                if _current_policy in _policy_names else 0)
+        _selected_policy = st.selectbox(
+            "How should the optimiser compare infeasible designs?",
+            options=_policy_names,
+            index=_idx,
+            format_func=lambda n: POLICY_META[n]["display_name"],
+            key="constraint_policy_input",
+            help="This setting applies globally to every algorithm "
+                 "in this experiment.",
+        )
+        _policy_meta = POLICY_META[_selected_policy]
+        st.caption(_policy_meta["description"])
+        with st.expander("View code and reference", expanded=False):
+            st.code(_policy_meta["code"], language="python")
+            st.caption(f"Reference: {_policy_meta['reference']}")
+            if _policy_meta.get("notes"):
+                st.caption(f"Notes: {_policy_meta['notes']}")
+
+        # Then the existing algorithm multiselect
         algo = st.multiselect(
             "Algorithms to run", list_algorithms(), key="algo_input",
             help="Every selected algorithm runs with the same number "
@@ -814,6 +844,7 @@ def _sync_sidebar_state(with_n_runs: bool = True):
         ("sade_crmax", "sade_crmax_input"),
         ("sade_conv", "sade_conv_input"), ("sade_tol", "sade_tol_input"),
         ("sade_stag", "sade_stag_input"),
+        ("constraint_policy", "constraint_policy_input"),
     ]
     if with_n_runs:
         pairs.append(("n_runs", "n_runs_input"))
@@ -861,6 +892,9 @@ def _apply_param_to_config(
 def _build_base_cfg():
     cfg = build_algorithm_config(
         int(st.session_state.ns), int(st.session_state.max_gen)
+    )
+    cfg.constraint_policy = str(
+        st.session_state.get("constraint_policy_input", "deb_prefers")
     )
 
     # Populate each selected algorithm's params from session_state.
@@ -1332,6 +1366,10 @@ def _restore_from_snapshot(data: dict):
         "use_vmax_input":    use_vmax,
         "fixed_pipes_input": fixed_str,
     }
+
+    widget_updates["constraint_policy_input"] = str(
+        cfg.get("constraint_policy") or "deb_prefers"
+    )
 
     # Derive algo_input from the loaded experiment's algorithms.
     saved = set(data.get("experiment", {}).get("algorithms", []))

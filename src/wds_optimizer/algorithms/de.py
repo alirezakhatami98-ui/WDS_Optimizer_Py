@@ -15,7 +15,7 @@ restart-on-stagnation mechanism (``config.Restart``).
 import numpy as np
 
 from ..optimization.evaluate import evaluate_population
-from ..optimization.policies import deb_prefers
+from ..optimization.policies import get_policy
 
 DE_STRATEGIES = ("rand/1/bin", "best/1/bin", "current-to-best/1/bin")
 
@@ -38,12 +38,26 @@ def _discretize(X, ND):
     return np.clip(np.floor(X + 0.5).astype(int), 0, ND - 1)
 
 
-def _best_index(cost, viol):
-    """Index of the best member under Deb's rules."""
-    feasible = np.where(viol == 0.0)[0]
-    if feasible.size:
-        return int(feasible[np.argmin(cost[feasible])])
-    return int(np.argmin(viol))
+def _best_index(cost, viol, policy=None):
+    """Index of the best member under the given policy.
+
+    ``policy=None`` uses Deb's rules (backward-compatible default for
+    any external caller).  Algorithms pass the configured policy
+    explicitly.
+    """
+    if policy is None:
+        feasible = np.where(viol == 0.0)[0]
+        if feasible.size:
+            return int(feasible[np.argmin(cost[feasible])])
+        return int(np.argmin(viol))
+    n = len(cost)
+    if n == 0:
+        raise ValueError("_best_index called on empty population")
+    best = 0
+    for i in range(1, n):
+        if policy(cost[i], viol[i], cost[best], viol[best]):
+            best = i
+    return best
 
 
 def run_de(problem, config,
@@ -70,6 +84,8 @@ def run_de(problem, config,
         raise ValueError(f"Unknown DE strategy: {strategy!r}")
     if NP < 4:
         raise ValueError("DE needs a population of at least 4 members.")
+
+    policy = get_policy(config.constraint_policy)
 
     cache = config.Cache if config.Cache is not None else {}
 
@@ -109,7 +125,7 @@ def run_de(problem, config,
     cost, viol, feas = evaluate_population(_discretize(X, ND), problem, cache)
     n_evals += NP
 
-    ib = _best_index(cost, viol)
+    ib = _best_index(cost, viol, policy)
     EpochCost, EpochViol = float(cost[ib]), float(viol[ib])
     GlobalSol = _discretize(X[:, ib], ND)
     GlobalCost, GlobalViol = EpochCost, EpochViol
@@ -134,7 +150,7 @@ def run_de(problem, config,
                 "DE execution was cancelled by the user.", partial=_partial(G)
             )
 
-        ibest = _best_index(cost, viol)
+        ibest = _best_index(cost, viol, policy)
         Xbest = X[:, ibest]
 
         # ---- mutation ----
@@ -168,17 +184,17 @@ def run_de(problem, config,
         )
         n_evals += NP
         for i in range(NP):
-            if not deb_prefers(cost[i], viol[i], cost_t[i], viol_t[i]):
+            if not policy(cost[i], viol[i], cost_t[i], viol_t[i]):
                 X[:, i] = U[:, i]
                 cost[i], viol[i] = cost_t[i], viol_t[i]
 
         # ---- update epoch / global bests ----
         epoch_improved = False
-        ib = _best_index(cost, viol)
-        if deb_prefers(cost[ib], viol[ib], EpochCost, EpochViol):
+        ib = _best_index(cost, viol, policy)
+        if policy(cost[ib], viol[ib], EpochCost, EpochViol):
             EpochCost, EpochViol = float(cost[ib]), float(viol[ib])
             epoch_improved = True
-            if deb_prefers(EpochCost, EpochViol,
+            if policy(EpochCost, EpochViol,
                                   GlobalCost, GlobalViol):
                 GlobalCost, GlobalViol = EpochCost, EpochViol
                 GlobalSol = _discretize(X[:, ib], ND)
@@ -207,9 +223,9 @@ def run_de(problem, config,
                 _discretize(X, ND), problem, cache
             )
             n_evals += NP
-            ib = _best_index(cost, viol)
+            ib = _best_index(cost, viol, policy)
             EpochCost, EpochViol = float(cost[ib]), float(viol[ib])
-            if deb_prefers(EpochCost, EpochViol,
+            if policy(EpochCost, EpochViol,
                                   GlobalCost, GlobalViol):
                 GlobalCost, GlobalViol = EpochCost, EpochViol
                 GlobalSol = _discretize(X[:, ib], ND)

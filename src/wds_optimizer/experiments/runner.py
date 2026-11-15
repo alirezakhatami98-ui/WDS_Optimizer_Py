@@ -51,7 +51,8 @@ class ExperimentResult:
     fixed_pipes: np.ndarray
     runs: dict = field(default_factory=dict)   # {algo: [RunRecord, ...]}
     cancelled: bool = False                    # True if stopped by the user
-    restart: dict = field(default_factory=dict)  # restart settings used
+    restart: dict = field(default_factory=dict)
+    constraint_policy: str = "deb_prefers"  # ← NEW
     # Extended constraint set (added alongside Pmax/Vmin support).  The
     # pre-Pmax/Vmin behaviour is preserved by the defaults: Pmin and
     # Vmax on, Pmax and Vmin off.  These fields exist so experiment
@@ -130,6 +131,7 @@ def run_experiment(
         variable_pipes=np.asarray(problem["VariablePipes"]),
         fixed_pipes=np.asarray(problem["FixedPipes"]),
         restart=_restart_dict(base_config),
+        constraint_policy=str(base_config.constraint_policy),
         Pmax=float(_constraints["Pmax"]["value"]),
         Vmin=float(_constraints["Vmin"]["value"]),
         use_pmin=bool(_constraints["Pmin"]["enabled"]),
@@ -166,7 +168,7 @@ def run_experiment(
             if getattr(base_config, "Restart", None) is not None:
                 cfg.Restart = replace(base_config.Restart)
             cfg.Seed = int(run_seeds[r])
-
+            cfg.constraint_policy = base_config.constraint_policy  # ← NEW
             # Wrap the per-gen callback to add run-level context
             per_run_cb = None
             if progress_callback is not None:

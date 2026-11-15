@@ -3,7 +3,7 @@
 import numpy as np
 
 from ..optimization.evaluate import evaluate_population
-from ..optimization.policies import deb_prefers
+from ..optimization.policies import get_policy
 
 class PSOCancelled(Exception):
     """Raised when PSO is cancelled.
@@ -40,6 +40,7 @@ def run_pso(problem, config,
     w = config.PSO.w
     c1 = config.PSO.c1
     c2 = config.PSO.c2
+    policy = get_policy(config.constraint_policy)
 
     cache = config.Cache if config.Cache is not None else {}
 
@@ -117,31 +118,18 @@ def run_pso(problem, config,
         prev_gbest = (GBestCost, GBestViol)      # swarm best of this epoch
 
         for i in range(N):
-            # ---- update PBest ----
-            if feas[i]:
-                if PBestViol[i] > 0 or cost[i] < PBestCost[i]:
-                    PBestCost[i] = cost[i]
-                    PBestViol[i] = viol[i]
-                    PBestX[:, i] = X_discrete[:, i]
-            else:
-                if PBestViol[i] > 0 and viol[i] < PBestViol[i]:
-                    PBestCost[i] = cost[i]
-                    PBestViol[i] = viol[i]
-                    PBestX[:, i] = X_discrete[:, i]
+            if policy(cost[i], viol[i], PBestCost[i], PBestViol[i]):
+                PBestCost[i] = cost[i]
+                PBestViol[i] = viol[i]
+                PBestX[:, i] = X_discrete[:, i]
 
             # ---- update GBest ----
-            if feas[i]:
-                if GBestViol > 0 or cost[i] < GBestCost:
-                    GBestCost = cost[i]
-                    GBestViol = viol[i]
-                    GBestX = X_discrete[:, i].copy()
-            else:
-                if GBestViol > 0 and viol[i] < GBestViol:
-                    GBestCost = cost[i]
-                    GBestViol = viol[i]
-                    GBestX = X_discrete[:, i].copy()
+            if policy(cost[i], viol[i], GBestCost, GBestViol):
+                GBestCost = cost[i]
+                GBestViol = viol[i]
+                GBestX = X_discrete[:, i].copy()
 
-        epoch_improved = deb_prefers(
+        epoch_improved = policy(
             GBestCost, GBestViol, prev_gbest[0], prev_gbest[1]
         )
 
@@ -157,7 +145,7 @@ def run_pso(problem, config,
             X[:, i] = X[:, i] + V[:, i]
 
         # ---- best over restarts ----
-        if deb_prefers(GBestCost, GBestViol, BestCost, BestViol):
+        if policy(GBestCost, GBestViol, BestCost, BestViol):
             BestX = GBestX.copy() if GBestX is not None else None
             BestCost, BestViol = GBestCost, GBestViol
             nfe_best = n_evals

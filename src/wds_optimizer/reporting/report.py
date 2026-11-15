@@ -464,6 +464,8 @@ def _build_markdown(*, experiment, summary, best_algo, best_run_index,
         on = bool(problem_snapshot.get(key, key in ("use_pmin", "use_vmax")))
         state = "on" if on else "off"
         L.append(f"- **{label}:** {disp:.2f} {unit} ({state})")
+    L.append(f"- **Constraint policy:** "
+             f"`{getattr(experiment, 'constraint_policy', 'deb_prefers')}`")
     L.append(f"- **Diameter options:** {len(D)} "
              f"({D[0]*1000:.1f} – {D[-1]*1000:.1f} mm)\n")
 
@@ -592,6 +594,7 @@ Contents
   Experiment seed   : {experiment.experiment_seed}
   NS                : {experiment.NS}
   MaxGen            : {experiment.MaxGen}
+  Constraint policy : {getattr(experiment, 'constraint_policy', 'deb_prefers')}
   Pmin              : {experiment.Pmin} m    [{'on' if experiment.use_pmin else 'off'}]
   Pmax              : {experiment.Pmax} m    [{'on' if experiment.use_pmax else 'off'}]
   Vmin              : {experiment.Vmin} m/s  [{'on' if experiment.use_vmin else 'off'}]

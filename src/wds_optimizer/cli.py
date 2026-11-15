@@ -42,6 +42,7 @@ from typing import Sequence
 import numpy as np
 
 from wds_optimizer.algorithms.registry import list_algorithms
+from wds_optimizer.optimization.policies import CONSTRAINT_POLICIES
 from wds_optimizer.api import (
     OptimizationRequest,
     OptimizationResult,
@@ -321,6 +322,7 @@ def _build_request_from_args(
         max_gen=args.max_gen,
         constraints=constraints,
         fixed_pipes=args.fixed or "",
+        constraint_policy=args.constraint_policy,
     )
 
 
@@ -657,6 +659,16 @@ def _add_constraint_args(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument("--fixed", default="",
                    help="Fixed pipe IDs, e.g. '1, 3'.")
+    p.add_argument(
+        "--constraint-policy",
+        choices=list(CONSTRAINT_POLICIES),
+        default="deb_prefers",
+        help="How to compare infeasible designs during selection. "
+             "deb_prefers (default) = Deb's feasibility rules; "
+             "fixed_penalty_prefers = add 1e9 penalty for infeasible; "
+             "simple_cost_only_prefers = ignore feasibility "
+             "(diagnostic only).",
+    )
 
 
 def _add_output_args(p: argparse.ArgumentParser) -> None:

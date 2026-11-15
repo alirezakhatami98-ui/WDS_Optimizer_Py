@@ -3,27 +3,22 @@
 import numpy as np
 
 from ..optimization.evaluate import evaluate_population
-from ..optimization.policies import deb_prefers
+from ..optimization.policies import get_policy
 
 # =====================================================================
 #  GA-internal helpers (previously in separate modules)
 # =====================================================================
 
-def selection_tournament(cost, viol, n_select, k, rng):
-    """Tournament selection with Deb's rules."""
-    N = len(cost)
-    idx = np.zeros(n_select, dtype=int)
-    for s in range(n_select):
-        cand = rng.integers(0, N, size=k)
-        best = int(cand[0])
-        for j in range(1, k):
-            cj = int(cand[j])
-            if deb_prefers(
-                cost[cj], viol[cj], cost[best], viol[best]
-            ):
-                best = cj
-        idx[s] = best
-    return idx
+def _selection_tournament(cost, viol, n, tournament_size, rng, policy):
+    chosen = []
+    for _ in range(n):
+        contestants = rng.integers(0, len(cost), size=tournament_size)
+        best = contestants[0]
+        for c in contestants[1:]:
+            if policy(cost[c], viol[c], cost[best], viol[best]):
+                best = c
+        chosen.append(int(best))
+    return np.asarray(chosen, dtype=int)
 
 
 def selection_roulette(fitness, n_select, rng):
@@ -34,8 +29,22 @@ def selection_roulette(fitness, n_select, rng):
     return np.clip(np.searchsorted(cum, r, side="left"), 0, len(cum) - 1)
 
 
-def calculate_fitness(cost, viol):
-    return 1.0 / (np.asarray(cost) + 2e6 * np.asarray(viol) ** 2 + 1e-6)
+def _calculate_fitness(cost, viol):
+    """Violation-weighted fitness for roulette selection.
+
+    Feasible designs get 1/cost; infeasible get 1/((1+viol)*cost).
+    This is Deb's-style fitness shaping and is preserved verbatim for
+    backward compatibility.
+
+    **Known limitation:** this function is not parameterized by the
+    configured constraint policy.  If you select ``fixed_penalty_prefers``
+    or ``simple_cost_only_prefers`` **and** use roulette selection, the
+    fitness shaping here still applies a Deb's-style violation penalty.
+    For full policy sensitivity, use tournament selection (``ga_sel =
+    "tournament"``).  This is documented in ``docs/algorithms.md``.
+    """
+    scale = np.where(viol == 0, 1.0, 1.0 / (1.0 + viol))
+    return scale / np.maximum(cost, 1e-9)
 
 class GACancelled(Exception):
     """Raised when the GA is cancelled via cancel_callback.
@@ -79,6 +88,7 @@ def run_ga(problem, config,
     )
 
     NS = config.NS
+    policy = get_policy(config.constraint_policy)
     MaxGen = config.MaxGen
     NVar = len(problem["VariablePipes"])
     ND = len(problem["D"])
@@ -145,12 +155,12 @@ def run_ga(problem, config,
 
         # ---- selection ----
         if config.GA.Selection == "tournament":
-            sel = selection_tournament(
-                cost, viol, NS, config.GA.TournamentSize, rng
+            sel = _selection_tournament(
+                cost, viol, NS, config.GA.TournamentSize, rng, policy
             )
         else:
             sel = selection_roulette(
-                calculate_fitness(cost, viol), NS, rng
+                _calculate_fitness(cost, viol), NS, rng
             )
         MatingPool = Pop[:, sel].copy()
 
@@ -205,7 +215,7 @@ def run_ga(problem, config,
         else:
             eCost, eViol = BestUnfCost, BestViolEver
 
-        if deb_prefers(eCost, eViol, GlobalCost, GlobalViol):
+        if policy(eCost, eViol, GlobalCost, GlobalViol):
             GlobalSol = (
                 BestSolEver if BestSolEver is not None else BestUnfSol
             ).copy()

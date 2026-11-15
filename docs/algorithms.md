@@ -24,21 +24,27 @@ below.
 
 All four algorithms share a **constraint policy** — a pure function
 that says "given two designs, which is preferable?".  The policy is
-visible and swappable:
+visible, swappable, and affects every algorithm in the experiment.
+
+**Selectable via:** GUI sidebar ("Constraint handling" section) ·
+CLI `--constraint-policy` · API `OptimizationRequest(constraint_policy=...)`.
 
 | Policy | Description | Reference |
 |--------|-------------|-----------|
 | `deb_prefers` (default) | Feasible > infeasible; among feasible, cheaper wins; among infeasible, smaller violation wins. | Deb (2000), *CMAME* 186:311-338 |
 | `fixed_penalty_prefers` | Effective cost = cost + 1e9 if infeasible.  Feasible + cheap wins. | Standard penalty method |
-| `simple_cost_only_prefers` | Ignore feasibility.  Diagnostic only. | — |
+| `simple_cost_only_prefers` | Ignore feasibility.  **Diagnostic only.** | — |
 
-Each policy lives in `optimization/policies.py` with its full code
-visible in `POLICY_META`.  Users and plugin authors can:
-- pick a built-in policy by name (no code needed), or
-- write a custom policy inline in their plugin file.
-
-Algorithms in this repository currently use `deb_prefers`.  Their
-`ALGORITHM_META["constraint_policy"]` field documents this.
+**Current limitations:**
+- GA's *roulette* selection uses its own fitness shaping (documented
+  in `ga.py::_calculate_fitness`) and is not policy-sensitive.  Use
+  tournament selection if you need full policy sensitivity.
+- GA's best-ever tracking compares raw costs among feasible designs;
+  it does not use the configured policy.  This does not affect which
+  designs compete in tournament selection, only which one is reported
+  as "best".
+- The other three algorithms (PSO, DE, SADE) fully honour the
+  configured policy in both selection and best-ever tracking.
 
 ---
 

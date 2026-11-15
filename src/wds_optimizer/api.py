@@ -282,6 +282,7 @@ class OptimizationRequest:
     # Sequence[int] = 0-based indices (API form)
     # str          = comma-separated 1-based IDs (GUI form)
     fixed_pipes: Sequence[int] | str = ()
+    constraint_policy: str = "deb_prefers"  # ← NEW
 
     # ---- Advanced ----
     verbose: bool = False
@@ -330,6 +331,13 @@ class OptimizationRequest:
                     f"unknown algorithm {a!r}; available: "
                     f"{sorted(valid_algos)}"
                 )
+
+        from wds_optimizer.optimization.policies import CONSTRAINT_POLICIES
+        if self.constraint_policy not in CONSTRAINT_POLICIES:
+            raise ValueError(
+                f"unknown constraint_policy {self.constraint_policy!r}; "
+                f"available: {sorted(CONSTRAINT_POLICIES)}"
+            )
 
         if self.n_runs < 1:
             raise ValueError(f"n_runs must be >= 1, got {self.n_runs}")
@@ -532,6 +540,7 @@ def _build_algorithm_config(request: OptimizationRequest) -> AlgorithmConfig:
     cfg = build_algorithm_config(
         NS=int(request.ns), MaxGen=int(request.max_gen)
     )
+    cfg.constraint_policy = str(request.constraint_policy)
     if request.ga is not None:
         cfg.GA = replace(request.ga)
     if request.pso is not None:
@@ -576,6 +585,7 @@ def _request_to_config_dict(request: OptimizationRequest) -> dict:
         "rs_keep_best": cfg.Restart.KeepBest,
         "rs_mode": cfg.Restart.Mode,
         "rs_perturb": cfg.Restart.PerturbRate,
+        "constraint_policy": request.constraint_policy,  # ← NEW
     }
 
 

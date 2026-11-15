@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-(nothing yet)
+### Added
+
+#### Constraint-handling policy (v0.3.2)
+- `constraint_policy` is now a first-class, end-to-end setting.
+- Three built-in policies: `deb_prefers` (default), `fixed_penalty_prefers`,
+  `simple_cost_only_prefers`.
+- GUI: "Constraint handling" section in the sidebar with dropdown,
+  description, and "View code and reference" expander.
+- CLI: `--constraint-policy {deb_prefers,fixed_penalty_prefers,simple_cost_only_prefers}`.
+- API: `OptimizationRequest.constraint_policy`.
+- Snapshots record `constraint_policy` under `config` and `experiment`;
+  old snapshots default to `deb_prefers`.
+- Each algorithm reads `config.constraint_policy` at run start.
 
 ## [0.2.0] - 2026-11-13
 

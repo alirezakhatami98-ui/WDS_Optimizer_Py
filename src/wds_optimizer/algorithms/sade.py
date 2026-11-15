@@ -39,7 +39,7 @@ import numpy as np
 
 from .de import _best_index, _discretize
 from ..optimization.evaluate import evaluate_population
-from ..optimization.policies import deb_prefers
+from ..optimization.policies import get_policy
 
 
 class SADECancelled(Exception):
@@ -81,6 +81,7 @@ def run_sade(problem, config,
     stag_max = int(getattr(sc, "StagnationMax", 0))
     if NP < 4:
         raise ValueError("SADE needs a population of at least 4 members.")
+    policy = get_policy(config.constraint_policy)
     if not (0.0 <= Fmin <= Fmax):
         raise ValueError("SADE needs 0 <= Fmin <= Fmax.")
     if not (0.0 <= CRmin <= CRmax <= 1.0):
@@ -141,7 +142,7 @@ def run_sade(problem, config,
     cost, viol, feas = evaluate_population(_discretize(X, ND), problem, cache)
     n_evals += NP
 
-    ib = _best_index(cost, viol)
+    ib = _best_index(cost, viol, policy)
     EpochCost, EpochViol = float(cost[ib]), float(viol[ib])
     GlobalSol = _discretize(X[:, ib], ND)
     GlobalCost, GlobalViol = EpochCost, EpochViol
@@ -200,7 +201,7 @@ def run_sade(problem, config,
         n_evals += NP
         success = np.zeros(NP, dtype=bool)
         for i in range(NP):
-            success[i] = not deb_prefers(
+            success[i] = not policy(
                 cost[i], viol[i], cost_t[i], viol_t[i])
         X[:, success] = U[:, success]
         cost[success] = cost_t[success]
@@ -233,11 +234,11 @@ def run_sade(problem, config,
 
         # ---- update epoch / global bests ----
         epoch_improved = False
-        ib = _best_index(cost, viol)
-        if deb_prefers(cost[ib], viol[ib], EpochCost, EpochViol):
+        ib = _best_index(cost, viol, policy)
+        if policy(cost[ib], viol[ib], EpochCost, EpochViol):
             EpochCost, EpochViol = float(cost[ib]), float(viol[ib])
             epoch_improved = True
-            if deb_prefers(EpochCost, EpochViol,
+            if policy(EpochCost, EpochViol,
                                   GlobalCost, GlobalViol):
                 GlobalCost, GlobalViol = EpochCost, EpochViol
                 GlobalSol = _discretize(X[:, ib], ND)
@@ -270,9 +271,9 @@ def run_sade(problem, config,
                 _discretize(X, ND), problem, cache
             )
             n_evals += NP
-            ib = _best_index(cost, viol)
+            ib = _best_index(cost, viol, policy)
             EpochCost, EpochViol = float(cost[ib]), float(viol[ib])
-            if deb_prefers(EpochCost, EpochViol,
+            if policy(EpochCost, EpochViol,
                                   GlobalCost, GlobalViol):
                 GlobalCost, GlobalViol = EpochCost, EpochViol
                 GlobalSol = _discretize(X[:, ib], ND)

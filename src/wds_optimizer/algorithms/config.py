@@ -89,6 +89,12 @@ class AlgorithmConfig:
     # whose params don't map to a typed field land here.  Algorithms
     # read their own extra values as they wish.
     extra: dict[str, dict] = field(default_factory=dict)
+    # Global constraint-handling policy for this run.
+    # Must be a key of optimization.policies.CONSTRAINT_POLICIES.
+    # Every algorithm reads this and calls get_policy(constraint_policy)
+    # to obtain the comparison function used for selection and
+    # best-ever tracking.  Default matches the historical behaviour.
+    constraint_policy: str = "deb_prefers"
 
 
 def build_algorithm_config(NS: int, MaxGen: int) -> AlgorithmConfig:
