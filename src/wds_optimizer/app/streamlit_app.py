@@ -1032,24 +1032,42 @@ def _render_scenarios_section() -> None:
 
 
 def _render_one_scenario_row(sc: Scenario, ws: Workspace) -> None:
-    """One row: name+status, load, duplicate, delete (with confirm)."""
+    """One row: name+status, load, duplicate, delete (with confirm).
+
+    Buttons use short text labels rather than emoji-only.  Emoji-only
+    labels render as tofu (empty boxes) on some Windows + browser
+    combinations where Streamlit's button font does not fall back to
+    Segoe UI Emoji; the tooltip still works but the user has no
+    on-screen hint.  Short labels ("Load", "Copy", "Delete") are
+    readable everywhere.
+    """
     is_active = (sc.scenario_id == ws.active_scenario_id)
     marker = "▶" if is_active else " "
-    cols = st.columns([5, 1, 1, 1])
+    # Narrow button columns but wide enough for 3-6 character labels.
+    cols = st.columns([4, 1, 1, 1])
     with cols[0]:
         st.markdown(f"{marker} **{sc.name}** `{sc.status}`")
     with cols[1]:
-        if st.button("📂", key=f"sc_load_{sc.scenario_id}",
-                     help="Load config into sidebar"):
+        if st.button(
+            "Load", key=f"sc_load_{sc.scenario_id}",
+            help="Load config into sidebar",
+            width="stretch",
+        ):
             _queue_scenario_load(sc)
     with cols[2]:
-        if st.button("📋", key=f"sc_dup_{sc.scenario_id}",
-                     help="Duplicate (new scenario, no result)"):
+        if st.button(
+            "Copy", key=f"sc_dup_{sc.scenario_id}",
+            help="Duplicate (new scenario, no result)",
+            width="stretch",
+        ):
             ws.add(clone_scenario(sc, sc.name + " (copy)"))
             st.rerun()
     with cols[3]:
-        if st.button("🗑", key=f"sc_del_{sc.scenario_id}",
-                     help="Delete"):
+        if st.button(
+            "Delete", key=f"sc_del_{sc.scenario_id}",
+            help="Delete (requires confirmation)",
+            width="stretch",
+        ):
             st.session_state.pending_delete = sc.scenario_id
             st.rerun()
 
@@ -1057,16 +1075,20 @@ def _render_one_scenario_row(sc: Scenario, ws: Workspace) -> None:
         st.warning(f"Delete scenario '{sc.name}'?  No undo.")
         cy, cn = st.columns(2)
         with cy:
-            if st.button("Yes, delete",
-                         key=f"sc_confirm_{sc.scenario_id}",
-                         width="stretch", type="primary"):
+            if st.button(
+                "Yes, delete",
+                key=f"sc_confirm_{sc.scenario_id}",
+                width="stretch", type="primary",
+            ):
                 ws.remove(sc.scenario_id)
                 st.session_state.pending_delete = None
                 st.rerun()
         with cn:
-            if st.button("Cancel",
-                         key=f"sc_cancel_{sc.scenario_id}",
-                         width="stretch"):
+            if st.button(
+                "Cancel",
+                key=f"sc_cancel_{sc.scenario_id}",
+                width="stretch",
+            ):
                 st.session_state.pending_delete = None
                 st.rerun()
 
