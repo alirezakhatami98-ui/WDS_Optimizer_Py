@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Scenarios (v0.4.1)
+- "6. Scenarios" panel in the sidebar.  Users can:
+  - Save the current sidebar configuration as a named scenario
+  - Update the active scenario from the current sidebar
+  - Load a scenario into the sidebar (clears any current experiment)
+  - Duplicate / delete scenarios
+  - Save the whole workspace (all scenarios) as a single JSON
+  - Load a workspace from a previously saved JSON
+- When a run finishes with an active scenario, the result is recorded
+  into that scenario (status becomes "Complete" or "Failed" on cancel).
+- Scenario data model lives in wds_optimizer/scenario.py; it is pure
+  data + I/O, no GUI imports, usable from CLI/API/tests/SaaS.
+- Scenarios embed input files by default so they are portable.
+
+### Fixed
+
+- OptimizationRequest now deep-copies the `constraints` dict.
+  Mutating the caller's dict after creating a request no longer
+  affects the request.  Same class of bug as the shallow copy fixed
+  in scenario.py (v0.4.0).
+
+### Notes
+
+- Loading a scenario into the sidebar populates the *configuration*
+  only, not the scenario's experiment result.  Viewing results of
+  completed scenarios across the whole workspace (batch mode) is
+  planned for v0.4.2.
+- Workspace files (wds_workspace_*.json) are separate from single-
+  experiment snapshots (wds_experiment_*.json).  Use the existing
+  "5. Save / Load" section for a single experiment; use "6. Scenarios"
+  for a workspace.
+
+### Added
+
 #### Constraint-handling policy (v0.3.2)
 - `constraint_policy` is now a first-class, end-to-end setting.
 - Three built-in policies: `deb_prefers` (default), `fixed_penalty_prefers`,

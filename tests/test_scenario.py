@@ -249,3 +249,16 @@ def test_workspace_duplicate_id_raises(tmp_path):
     ws.add(sc)
     with pytest.raises(ValueError, match="already in workspace"):
         ws.add(sc)
+
+def test_workspace_to_dict_structure(tmp_path):
+    """workspace_to_dict returns a serializable dict with all scenarios."""
+    from wds_optimizer.scenario import workspace_to_dict
+    ws = Workspace()
+    ws.add(_make_scenario(tmp_path, "a"))
+    ws.add(_make_scenario(tmp_path, "b"))
+    data = workspace_to_dict(ws)
+    assert data["version"] == "0.4.0"
+    assert data["active_scenario_id"] == ws.active_scenario_id
+    assert len(data["scenarios"]) == 2
+    names = {entry["scenario"]["name"] for entry in data["scenarios"]}
+    assert names == {"a", "b"}

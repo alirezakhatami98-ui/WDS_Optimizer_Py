@@ -72,6 +72,11 @@ from wds_optimizer.app.compare import (
     compute_comparison_stats, overall_stats,
 )
 from wds_optimizer.reporting.report import build_report_zip
+from wds_optimizer.scenario import (
+    Scenario, Workspace,
+    new_scenario, clone_scenario,
+    workspace_to_dict, load_workspace,
+)
 
 # =====================================================================
 #  Page config & cached resources
@@ -566,9 +571,14 @@ def _render_sidebar():
                 except Exception as e:
                     st.error(f"Load failed: {e}")
 
-        # ---- 6. Sweep ----
+        # ---- 6. Scenarios ----
         st.divider()
-        st.header("6. Parameter Sweep")
+        st.header("6. Scenarios")
+        _render_scenarios_section()
+        
+        # ---- 7. Sweep ----
+        st.divider()
+        st.header("7. Parameter Sweep")
 
         with st.expander("Configure sweep", expanded=False):
             _units_for_sweep = st.session_state.get("network_units")
@@ -612,9 +622,9 @@ def _render_sidebar():
             except ValueError as e:
                 st.error(f"Invalid sweep config: {e}")
 
-        # ---- 7. Reproducibility Report ----
+        # ---- 8. Reproducibility Report ----
         st.divider()
-        st.header("7. Reproducibility Report")
+        st.header("8. Reproducibility Report")
         if st.session_state.experiment is not None:
             if st.button("📄 Generate report (.zip)", width="stretch"):
                 with st.spinner("Building report (figures, data, JSON)..."):
@@ -673,6 +683,364 @@ def _sweep_param_label(key: str, units: dict | None = None) -> str:
         u = (units or {}).get("VelocityUnit", "m/s")
         return f"Max velocity ({u})"
     return SWEEP_PARAMETERS.get(key, key)
+
+def _scenario_from_sidebar(name: str) -> Scenario:
+    """Build a Draft scenario from the current sidebar configuration.
+
+    Reads canonical keys (``st.session_state.pmin``, etc.) and
+    algorithm widget keys (``ga_pc_input``, etc.) via the same path
+    ``_start_run`` uses, so the scenario matches what would run if the
+    user clicked Run right now.
+
+    Raises ``ValueError`` if the input files are not loaded or the
+    network units cannot be determined.
+    """
+    from wds_optimizer.algorithms.registry import ALGORITHM_REGISTRY
+    from wds_optimizer.hydraulics.units import (
+        pressure_to_si, velocity_to_si,
+    )
+
+    if not st.session_state.inp_path:
+        raise ValueError("Load input files first.")
+
+    units = st.session_state.get("network_units")
+    if units is None:
+        raise ValueError(
+            "Network units not detected — reload the .inp file."
+        )
+
+    constraints = {
+        "Pmin": {"enabled": bool(st.session_state.use_pmin),
+                 "value": pressure_to_si(st.session_state.pmin, units)},
+        "Pmax": {"enabled": bool(st.session_state.use_pmax),
+                 "value": pressure_to_si(st.session_state.pmax, units)},
+        "Vmin": {"enabled": bool(st.session_state.use_vmin),
+                 "value": velocity_to_si(st.session_state.vmin, units)},
+        "Vmax": {"enabled": bool(st.session_state.use_vmax),
+                 "value": velocity_to_si(st.session_state.vmax, units)},
+    }
+
+    algo_params: dict[str, dict] = {}
+    for short_id in st.session_state.get("algo_input", []):
+        entry = ALGORITHM_REGISTRY.get(short_id)
+        if entry is None:
+            continue
+        params = {}
+        for p in entry["meta"]["params"]:
+            wk = p["key"] + "_input"
+            params[p["key"]] = st.session_state.get(wk, p["default"])
+        algo_params[short_id] = params
+
+    return new_scenario(
+        name=name,
+        inp_path=st.session_state.inp_path,
+        d_path=st.session_state.d_path,
+        cost_path=st.session_state.cost_path,
+        diam_unit=st.session_state.diam_unit,
+        algorithms=list(st.session_state.get("algo_input", [])),
+        n_runs=int(st.session_state.n_runs),
+        seed=int(st.session_state.exp_seed),
+        ns=int(st.session_state.ns),
+        max_gen=int(st.session_state.max_gen),
+        constraints=constraints,
+        algorithm_params=algo_params,
+        constraint_policy=str(st.session_state.get(
+            "constraint_policy_input", "deb_prefers")),
+        fixed_pipes=str(st.session_state.get("fixed_pipes", "")),
+    )
+
+
+def _queue_scenario_load(sc: Scenario) -> None:
+    """Load a scenario's configuration into the sidebar and rerun.
+
+    Only the *configuration* is loaded, not the scenario's experiment
+    result.  Viewing results of completed scenarios is a v0.4.2
+    feature (batch runs + results panel).  This function clears any
+    current experiment so the tabs do not show stale results from a
+    previous run.
+
+    Input files: if the scenario has embedded inputs (the default when
+    saved), write them to temp files and use those paths — this makes
+    the scenario portable even if the original paths no longer exist.
+    Otherwise, use the scenario's original paths (may fail if the user
+    moved the files; that surfaces as an error on Run).
+    """
+    import uuid as _uuid
+    from wds_optimizer.algorithms.registry import ALGORITHM_REGISTRY
+    from wds_optimizer.hydraulics.units import (
+        detect_network_units, pressure_from_si, velocity_from_si,
+    )
+    from wds_optimizer.scenario import to_dict as _scenario_to_dict
+
+    # ---- Resolve input file paths ----
+    data = _scenario_to_dict(sc, embed_inputs=True)
+    embedded = data.get("inputs", {})
+    tmpdir = Path(tempfile.gettempdir()) / "wds_optimizer_scenario"
+    tmpdir.mkdir(parents=True, exist_ok=True)
+    uid = _uuid.uuid4().hex[:8]
+
+    if embedded.get("inp"):
+        inp_p = tmpdir / f"{uid}.inp"
+        inp_p.write_text(embedded["inp"], encoding="utf-8")
+        new_inp_path = str(inp_p)
+    else:
+        new_inp_path = sc.inp_path
+
+    if embedded.get("D_txt"):
+        d_p = tmpdir / f"{uid}_D.txt"
+        d_p.write_text(embedded["D_txt"], encoding="utf-8")
+        new_d_path = str(d_p)
+    else:
+        new_d_path = sc.d_path
+
+    if embedded.get("cost_txt"):
+        c_p = tmpdir / f"{uid}_Cost.txt"
+        c_p.write_text(embedded["cost_txt"], encoding="utf-8")
+        new_cost_path = str(c_p)
+    else:
+        new_cost_path = sc.cost_path
+
+    # ---- Detect units on the resolved file ----
+    try:
+        import wntr
+        wn_units = detect_network_units(
+            wntr.network.WaterNetworkModel(new_inp_path))
+    except Exception:
+        wn_units = st.session_state.get("network_units") or {
+            "System": "SI", "PressureUnit": "m",
+            "VelocityUnit": "m/s", "LengthUnit": "m",
+            "DiameterUnit": "mm",
+        }
+
+    # ---- Canonical keys (immediate) ----
+    st.session_state.inp_path = new_inp_path
+    st.session_state.d_path = new_d_path
+    st.session_state.cost_path = new_cost_path
+    st.session_state.diam_unit = sc.diam_unit
+    st.session_state.network_units = wn_units
+
+    # ---- Clear any current experiment so tabs don't show stale data ----
+    st.session_state.experiment = None
+    st.session_state.problem_snapshot = None
+    st.session_state.best_algo = None
+    st.session_state.best_run_index = None
+    st.session_state.best_position_m = None
+    st.session_state.best_score = None
+    st.session_state.best_feasible = False
+    st.session_state.node_pressures = None
+    st.session_state.pipe_velocities = None
+    st.session_state.hydraulics_converged = False
+    _clear_run_ui_state()
+
+    # ---- Widget-key updates (queued, applied on next render) ----
+    updates: dict = {
+        "algo_input": list(sc.algorithms),
+        "ns_input": int(sc.ns),
+        "max_gen_input": int(sc.max_gen),
+        "n_runs_input": int(sc.n_runs),
+        "exp_seed_input": int(sc.seed),
+        "constraint_policy_input": str(sc.constraint_policy),
+        "fixed_pipes_input": str(sc.fixed_pipes or ""),
+        "diam_unit_input": sc.diam_unit,
+        "pmin_input": float(pressure_from_si(
+            sc.constraints["Pmin"]["value"], wn_units)),
+        "pmax_input": float(pressure_from_si(
+            sc.constraints["Pmax"]["value"], wn_units)),
+        "vmin_input": float(velocity_from_si(
+            sc.constraints["Vmin"]["value"], wn_units)),
+        "vmax_input": float(velocity_from_si(
+            sc.constraints["Vmax"]["value"], wn_units)),
+        "use_pmin_input": bool(sc.constraints["Pmin"]["enabled"]),
+        "use_pmax_input": bool(sc.constraints["Pmax"]["enabled"]),
+        "use_vmin_input": bool(sc.constraints["Vmin"]["enabled"]),
+        "use_vmax_input": bool(sc.constraints["Vmax"]["enabled"]),
+    }
+    for short_id, params in sc.algorithm_params.items():
+        entry = ALGORITHM_REGISTRY.get(short_id)
+        if entry is None:
+            continue
+        for p in entry["meta"]["params"]:
+            if p["key"] in params:
+                updates[p["key"] + "_input"] = params[p["key"]]
+
+    st.session_state._pending_restore = updates
+    st.rerun()
+
+
+def _record_run_in_active_scenario(
+    result, elapsed: float, cancelled: bool,
+) -> None:
+    """If there is an active scenario, record this run into it.
+
+    Called from ``_finalize_run`` after the experiment result is
+    stored on session_state.  Draft scenarios become Complete (or
+    Failed on cancel).  Scenarios without an active pointer are
+    untouched.
+    """
+    ws = st.session_state.get("workspace")
+    if ws is None:
+        return
+    active = ws.active()
+    if active is None:
+        return
+    active.experiment = result
+    active.elapsed_seconds = float(elapsed)
+    if cancelled:
+        active.status = "Failed"
+        active.error = "Cancelled by user"
+    else:
+        active.status = "Complete"
+        active.error = None
+
+
+def _render_scenarios_section() -> None:
+    """Render the Scenarios panel in the sidebar (v0.4.1).
+
+    Read-only for results — scenario results are viewable in v0.4.2
+    via the batch runs + results panel.  For v0.4.1, the panel
+    supports: create, load (into sidebar), duplicate, delete,
+    workspace save/load.
+    """
+    import json as _json
+    from wds_optimizer.scenario import Workspace
+
+    if st.session_state.get("workspace") is None:
+        st.session_state.workspace = Workspace()
+    ws: Workspace = st.session_state.workspace
+
+    active = ws.active()
+    if active is not None:
+        st.caption(
+            f"Active scenario: **{active.name}** "
+            f"`{active.status}`"
+        )
+    else:
+        st.caption("No active scenario. Save current config below.")
+
+    # ---- Workspace save / load ----
+    c_save, c_load = st.columns(2)
+    with c_save:
+        try:
+            ws_dict = workspace_to_dict(ws)
+            st.download_button(
+                "💾 Workspace",
+                data=_json.dumps(
+                    ws_dict, indent=2, ensure_ascii=False,
+                ).encode("utf-8"),
+                file_name=(
+                    f"wds_workspace_"
+                    f"{datetime.now():%Y%m%d_%H%M%S}.json"
+                ),
+                mime="application/json",
+                width="stretch",
+                disabled=(len(ws.list()) == 0),
+            )
+        except Exception as e:
+            st.caption(f"Cannot serialize workspace: {e}")
+    with c_load:
+        ws_upload = st.file_uploader(
+            "Load workspace", type=["json"], key="ws_upload",
+            label_visibility="collapsed",
+        )
+    if ws_upload is not None:
+        if st.button(
+            "Load workspace (replaces current)",
+            width="stretch", key="ws_load_confirm",
+        ):
+            try:
+                st.session_state.workspace = load_workspace(ws_upload)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Load failed: {type(e).__name__}: {e}")
+
+    # ---- Scenario list ----
+    scenarios = ws.list()
+    if scenarios:
+        with st.expander(
+            f"Scenarios ({len(scenarios)})", expanded=True,
+        ):
+            for sc in scenarios:
+                _render_one_scenario_row(sc, ws)
+    else:
+        st.caption("No scenarios yet.")
+
+    # ---- Save current config as new scenario ----
+    st.markdown("**Save current config**")
+    name = st.text_input(
+        "Scenario name", key="new_scenario_name",
+        placeholder="e.g. GA / Pc=0.8 / Hanoi",
+        label_visibility="collapsed",
+    )
+    c_new, c_upd = st.columns(2)
+    with c_new:
+        if st.button(
+            "💾 Save as new", width="stretch",
+            key="scenario_save_new",
+            disabled=not name.strip(),
+        ):
+            try:
+                sc = _scenario_from_sidebar(name.strip())
+                ws.add(sc)
+                st.session_state.new_scenario_name = ""
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not save: {e}")
+    with c_upd:
+        if st.button(
+            "🔄 Update active", width="stretch",
+            key="scenario_update_active",
+            disabled=(ws.active() is None),
+            help="Overwrite the active scenario's config with the "
+                 "current sidebar.  Clears the scenario's result.",
+        ):
+            try:
+                new_sc = _scenario_from_sidebar(ws.active().name)
+                new_sc.scenario_id = ws.active().scenario_id
+                new_sc.created_at = ws.active().created_at
+                ws.scenarios[new_sc.scenario_id] = new_sc
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not update: {e}")
+
+
+def _render_one_scenario_row(sc: Scenario, ws: Workspace) -> None:
+    """One row: name+status, load, duplicate, delete (with confirm)."""
+    is_active = (sc.scenario_id == ws.active_scenario_id)
+    marker = "▶" if is_active else " "
+    cols = st.columns([5, 1, 1, 1])
+    with cols[0]:
+        st.markdown(f"{marker} **{sc.name}** `{sc.status}`")
+    with cols[1]:
+        if st.button("📂", key=f"sc_load_{sc.scenario_id}",
+                     help="Load config into sidebar"):
+            _queue_scenario_load(sc)
+    with cols[2]:
+        if st.button("📋", key=f"sc_dup_{sc.scenario_id}",
+                     help="Duplicate (new scenario, no result)"):
+            ws.add(clone_scenario(sc, sc.name + " (copy)"))
+            st.rerun()
+    with cols[3]:
+        if st.button("🗑", key=f"sc_del_{sc.scenario_id}",
+                     help="Delete"):
+            st.session_state.pending_delete = sc.scenario_id
+            st.rerun()
+
+    if st.session_state.get("pending_delete") == sc.scenario_id:
+        st.warning(f"Delete scenario '{sc.name}'?  No undo.")
+        cy, cn = st.columns(2)
+        with cy:
+            if st.button("Yes, delete",
+                         key=f"sc_confirm_{sc.scenario_id}",
+                         width="stretch", type="primary"):
+                ws.remove(sc.scenario_id)
+                st.session_state.pending_delete = None
+                st.rerun()
+        with cn:
+            if st.button("Cancel",
+                         key=f"sc_cancel_{sc.scenario_id}",
+                         width="stretch"):
+                st.session_state.pending_delete = None
+                st.rerun()
 
 def _config_for_snapshot() -> dict:
     """Flat config dict for build_snapshot / build_report_zip.
@@ -1237,6 +1605,9 @@ def _finalize_run(job: BackgroundJob):
 
     # New experiment — invalidate run-specific UI state
     _clear_run_ui_state()
+
+    # If there is an active scenario, record this run's result in it
+    _record_run_in_active_scenario(result, elapsed, cancelled)
 
     st.rerun()
 

@@ -299,3 +299,17 @@ def test_cancel_mid_run_returns_partial(files):
     # have completed all 50 generations
     assert result.experiment.cancelled is True
     assert result.best_score < float("inf")
+
+def test_request_deep_copies_constraints(files):
+    """Mutating the caller's constraints dict must not affect the request."""
+    constraints = {
+        "Pmin": {"enabled": True,  "value": 30.0},
+        "Pmax": {"enabled": False, "value": 100.0},
+        "Vmin": {"enabled": False, "value": 0.0},
+        "Vmax": {"enabled": True,  "value": 2.5},
+    }
+    req = _basic_request(files, constraints=constraints)
+    constraints["Pmin"]["value"] = 999
+    constraints["Vmax"]["enabled"] = False
+    assert req.constraints["Pmin"]["value"] == 30.0
+    assert req.constraints["Vmax"]["enabled"] is True

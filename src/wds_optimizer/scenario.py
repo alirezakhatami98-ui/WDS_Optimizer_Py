@@ -364,15 +364,24 @@ class Workspace:
         return list(self.scenarios.values())
 
 
-def save_workspace(ws: Workspace, path: str | Path) -> None:
-    """Save an entire workspace (all scenarios) to one JSON file."""
-    data = {
+def workspace_to_dict(ws: Workspace) -> dict:
+    """Return a workspace as a JSON-friendly dict.
+
+    Extracted from save_workspace so the GUI can call
+    ``st.download_button`` with the serialized bytes without writing
+    a temp file first.
+    """
+    return {
         "version": _SCENARIO_VERSION,
         "active_scenario_id": ws.active_scenario_id,
         "scenarios": [to_dict(sc) for sc in ws.list()],
     }
+
+
+def save_workspace(ws: Workspace, path: str | Path) -> None:
+    """Save an entire workspace (all scenarios) to one JSON file."""
     Path(path).write_text(
-        json.dumps(data, indent=2, ensure_ascii=False),
+        json.dumps(workspace_to_dict(ws), indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
 

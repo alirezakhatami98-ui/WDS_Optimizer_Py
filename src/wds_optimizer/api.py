@@ -290,6 +290,13 @@ class OptimizationRequest:
     def __post_init__(self):
         if self.constraints is None:
             self.constraints = _default_constraints()
+        else:
+            # Deep-copy: a caller may pass a dict they later mutate
+            # (e.g. from another scenario or a template).  Shallow
+            # copies (dict(constraints)) share the inner dicts and
+            # leak mutations across scenarios.  Same class of bug as
+            # the one fixed in scenario.py v0.4.0.
+            self.constraints = copy.deepcopy(self.constraints)
         # Coerce paths to str for consistent hashing / caching
         self.inp_path  = str(self.inp_path)
         self.d_path    = str(self.d_path)

@@ -29,6 +29,9 @@ _KEYS = {
     "compare_result": None,
     "report_zip":      None,
     "report_filename": None,
+    "workspace": None,           # lazily created in _render_sidebar
+    "new_scenario_name": "",     # text input state
+    "pending_delete": None,      # scenario id awaiting delete confirmation
     "network_units":      None,   # dict from detect_network_units
     "network_units_prev": None,   # previous units (for auto-convert on switch)
     "job":        None,           # BackgroundJob currently running (or None)
