@@ -262,3 +262,84 @@ def test_workspace_to_dict_structure(tmp_path):
     assert len(data["scenarios"]) == 2
     names = {entry["scenario"]["name"] for entry in data["scenarios"]}
     assert names == {"a", "b"}
+
+# ---------------------------------------------------------------------
+#  GUI helper: _scenario_from_sidebar
+# ---------------------------------------------------------------------
+
+def test_scenario_from_sidebar_reads_widget_keys(tmp_path, monkeypatch):
+    """_scenario_from_sidebar must read widget keys, not canonical keys.
+
+    Regression for a bug where the helper read st.session_state.pmin
+    (canonical, stale unless a run has synced it) instead of
+    st.session_state.pmin_input (the widget value the user is looking
+    at).
+    """
+    from unittest.mock import patch as _patch
+    import streamlit as st
+
+    with _patch("streamlit.set_page_config"):
+        from wds_optimizer.app import streamlit_app
+        from wds_optimizer.app.streamlit_app import _scenario_from_sidebar
+
+    class FakeSession(dict):
+        def __getattr__(self, k):
+            try:
+                return self[k]
+            except KeyError:
+                raise AttributeError(k)
+        def __setattr__(self, k, v):
+            self[k] = v
+
+    fake = FakeSession(
+        inp_path=str(tmp_path / "net.inp"),
+        d_path=str(tmp_path / "D.txt"),
+        cost_path=str(tmp_path / "Cost.txt"),
+        diam_unit="mm",
+        network_units={
+            "System": "SI", "PressureUnit": "m",
+            "VelocityUnit": "m/s", "LengthUnit": "m",
+            "DiameterUnit": "mm",
+        },
+        # Widget keys: what the user currently sees
+        pmin_input=45.0,
+        pmax_input=100.0,
+        vmin_input=0.0,
+        vmax_input=2.5,
+        use_pmin_input=True,
+        use_pmax_input=False,
+        use_vmin_input=False,
+        use_vmax_input=True,
+        algo_input=["GA"],
+        ns_input=100,
+        max_gen_input=200,
+        n_runs_input=3,
+        exp_seed_input=7,
+        constraint_policy_input="deb_prefers",
+        fixed_pipes_input="",
+        # Stale canonical keys — should be IGNORED by the helper
+        pmin=30.0, pmax=100.0, vmin=0.0, vmax=2.5,
+        use_pmin=True, use_pmax=False, use_vmin=False, use_vmax=True,
+        ns=50, max_gen=500, n_runs=1, exp_seed=1,
+        ga_pc_input=0.8, ga_pm_input=0.03, ga_sel_input="tournament",
+        sade_fmin_input=0.1, sade_fmax_input=0.9,
+        sade_crmin_input=0.1, sade_crmax_input=0.9,
+        sade_conv_input=True, sade_tol_input=1e-6, sade_stag_input=300,
+        pso_w_input=0.7, pso_c1_input=1.5, pso_c2_input=1.5,
+        de_f_input=0.5, de_cr_input=0.3, de_strategy_input="rand/1/bin",
+    )
+    # Existing files must exist for from_sidebar to succeed
+    (tmp_path / "net.inp").write_text("[TITLE]\nt\n[END]\n")
+    (tmp_path / "D.txt").write_text("150\n")
+    (tmp_path / "Cost.txt").write_text("100\n")
+
+    monkeypatch.setattr(st, "session_state", fake)
+    sc = _scenario_from_sidebar("test")
+
+    # Values from widget keys (not canonical)
+    assert sc.ns == 100            # not 50
+    assert sc.max_gen == 200       # not 500
+    assert sc.n_runs == 3          # not 1
+    assert sc.seed == 7            # not 1
+    assert sc.constraints["Pmin"]["value"] == 45.0   # not 30.0
+    assert sc.algorithm_params["GA"]["ga_pc"] == 0.8

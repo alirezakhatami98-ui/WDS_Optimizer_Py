@@ -687,20 +687,22 @@ def _sweep_param_label(key: str, units: dict | None = None) -> str:
 def _scenario_from_sidebar(name: str) -> Scenario:
     """Build a Draft scenario from the current sidebar configuration.
 
-    Reads canonical keys (``st.session_state.pmin``, etc.) and
-    algorithm widget keys (``ga_pc_input``, etc.) via the same path
-    ``_start_run`` uses, so the scenario matches what would run if the
-    user clicked Run right now.
+    Reads **widget keys** (``pmin_input``, ``ga_pc_input``, ...) rather
+    than canonical keys (``pmin``, ``ga_pc``, ...).  Reason: canonical
+    keys are only synced by ``_sync_sidebar_state`` at the start of a
+    run.  If the user has edited a widget since the last run, the
+    canonical key is stale — using it would save a scenario that does
+    not match what is currently on screen.
 
-    Raises ``ValueError`` if the input files are not loaded or the
-    network units cannot be determined.
+    Raises ``ValueError`` if input files are not loaded or the network
+    units cannot be determined.
     """
     from wds_optimizer.algorithms.registry import ALGORITHM_REGISTRY
     from wds_optimizer.hydraulics.units import (
         pressure_to_si, velocity_to_si,
     )
 
-    if not st.session_state.inp_path:
+    if not st.session_state.get("inp_path"):
         raise ValueError("Load input files first.")
 
     units = st.session_state.get("network_units")
@@ -709,44 +711,60 @@ def _scenario_from_sidebar(name: str) -> Scenario:
             "Network units not detected — reload the .inp file."
         )
 
+    # ---- Constraints: read from widget keys ----
     constraints = {
-        "Pmin": {"enabled": bool(st.session_state.use_pmin),
-                 "value": pressure_to_si(st.session_state.pmin, units)},
-        "Pmax": {"enabled": bool(st.session_state.use_pmax),
-                 "value": pressure_to_si(st.session_state.pmax, units)},
-        "Vmin": {"enabled": bool(st.session_state.use_vmin),
-                 "value": velocity_to_si(st.session_state.vmin, units)},
-        "Vmax": {"enabled": bool(st.session_state.use_vmax),
-                 "value": velocity_to_si(st.session_state.vmax, units)},
+        "Pmin": {
+            "enabled": bool(st.session_state.get("use_pmin_input", True)),
+            "value": pressure_to_si(
+                float(st.session_state.get("pmin_input", 30.0)), units),
+        },
+        "Pmax": {
+            "enabled": bool(st.session_state.get("use_pmax_input", False)),
+            "value": pressure_to_si(
+                float(st.session_state.get("pmax_input", 100.0)), units),
+        },
+        "Vmin": {
+            "enabled": bool(st.session_state.get("use_vmin_input", False)),
+            "value": velocity_to_si(
+                float(st.session_state.get("vmin_input", 0.0)), units),
+        },
+        "Vmax": {
+            "enabled": bool(st.session_state.get("use_vmax_input", True)),
+            "value": velocity_to_si(
+                float(st.session_state.get("vmax_input", 2.5)), units),
+        },
     }
 
+    # ---- Algorithm params: read from widget keys (already correct) ----
+    algorithms = list(st.session_state.get("algo_input", []))
     algo_params: dict[str, dict] = {}
-    for short_id in st.session_state.get("algo_input", []):
+    for short_id in algorithms:
         entry = ALGORITHM_REGISTRY.get(short_id)
         if entry is None:
             continue
-        params = {}
+        params: dict = {}
         for p in entry["meta"]["params"]:
             wk = p["key"] + "_input"
             params[p["key"]] = st.session_state.get(wk, p["default"])
         algo_params[short_id] = params
 
+    # ---- Scalar config: read from widget keys ----
     return new_scenario(
         name=name,
         inp_path=st.session_state.inp_path,
         d_path=st.session_state.d_path,
         cost_path=st.session_state.cost_path,
-        diam_unit=st.session_state.diam_unit,
-        algorithms=list(st.session_state.get("algo_input", [])),
-        n_runs=int(st.session_state.n_runs),
-        seed=int(st.session_state.exp_seed),
-        ns=int(st.session_state.ns),
-        max_gen=int(st.session_state.max_gen),
+        diam_unit=str(st.session_state.get("diam_unit_input", "mm")),
+        algorithms=algorithms,
+        n_runs=int(st.session_state.get("n_runs_input", 1)),
+        seed=int(st.session_state.get("exp_seed_input", 1)),
+        ns=int(st.session_state.get("ns_input", 50)),
+        max_gen=int(st.session_state.get("max_gen_input", 500)),
         constraints=constraints,
         algorithm_params=algo_params,
         constraint_policy=str(st.session_state.get(
             "constraint_policy_input", "deb_prefers")),
-        fixed_pipes=str(st.session_state.get("fixed_pipes", "")),
+        fixed_pipes=str(st.session_state.get("fixed_pipes_input", "")),
     )
 
 
@@ -904,6 +922,13 @@ def _render_scenarios_section() -> None:
     import json as _json
     from wds_optimizer.scenario import Workspace
 
+    # Clear the scenario-name input if a previous run requested it.
+    # Must happen BEFORE st.text_input(key="new_scenario_name") is
+    # instantiated; Streamlit forbids modifying a widget's key in the
+    # same run after the widget exists.
+    if st.session_state.pop("_clear_scenario_name", False):
+        st.session_state.new_scenario_name = ""
+
     if st.session_state.get("workspace") is None:
         st.session_state.workspace = Workspace()
     ws: Workspace = st.session_state.workspace
@@ -981,7 +1006,10 @@ def _render_scenarios_section() -> None:
             try:
                 sc = _scenario_from_sidebar(name.strip())
                 ws.add(sc)
-                st.session_state.new_scenario_name = ""
+                # Do NOT set st.session_state.new_scenario_name here:
+                # the widget with that key has already been created in
+                # this run.  Queue the clear for the next run instead.
+                st.session_state._clear_scenario_name = True
                 st.rerun()
             except Exception as e:
                 st.error(f"Could not save: {e}")
