@@ -333,7 +333,14 @@ def test_source_has_no_non_ascii_outside_comments(filename):
 # ---------------------------------------------------------------------------
 
 def _namespace(**kw):
-    """Build an argparse.Namespace with sensible defaults for cmd_run."""
+    """Build an argparse.Namespace with sensible defaults for cmd_run.
+
+    Keep this in sync with the argparse definition in cli.py — every
+    ``args.<field>`` that ``cmd_run`` reads must be present here, even
+    if only as a default.  Otherwise a test that patches
+    ``run_optimization`` and calls ``cmd_run`` directly will hit an
+    AttributeError before reaching the patched code.
+    """
     import argparse
     base = dict(
         inp="", d="", cost="", diam_unit="mm",
@@ -342,6 +349,7 @@ def _namespace(**kw):
         units="auto", fixed="",
         output=None, csv=None, excel=None, report=None,
         reference_cost=None, success_tol=1.0, quiet=True,
+        constraint_policy="deb_prefers",   # ← NEW (v0.3.2)
     )
     base.update(kw)
     return argparse.Namespace(**base)
