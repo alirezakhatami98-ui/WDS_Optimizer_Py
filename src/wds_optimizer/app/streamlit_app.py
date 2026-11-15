@@ -524,14 +524,7 @@ def _render_sidebar():
                     node_pressures=st.session_state.node_pressures,
                     pipe_velocities=st.session_state.pipe_velocities,
                     hydraulics_converged=st.session_state.hydraulics_converged,
-                    config={k: st.session_state[k] for k in (
-                        "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
-                        "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
-                        "de_f", "de_cr", "de_strategy",
-                        "sade_fmin", "sade_fmax", "sade_crmin",
-                        "sade_crmax", "sade_conv", "sade_tol",
-                        "sade_stag",
-                    )},
+                    config=_config_for_snapshot(),
                     inp_content=inp_content,
                     d_content=d_content,
                     cost_content=cost_content,
@@ -638,14 +631,7 @@ def _render_sidebar():
                             node_pressures=st.session_state.node_pressures,
                             pipe_velocities=st.session_state.pipe_velocities,
                             hydraulics_converged=st.session_state.hydraulics_converged,
-                            config={k: st.session_state[k] for k in (
-                                "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
-                                "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
-                        "de_f", "de_cr", "de_strategy",
-                        "sade_fmin", "sade_fmax", "sade_crmin",
-                        "sade_crmax", "sade_conv", "sade_tol",
-                        "sade_stag",
-                            )},
+                            config=_config_for_snapshot(),
                             reference_cost=(
                                 float(st.session_state.get(
                                     "ref_cost_input") or 0.0) or None),
@@ -687,6 +673,31 @@ def _sweep_param_label(key: str, units: dict | None = None) -> str:
         u = (units or {}).get("VelocityUnit", "m/s")
         return f"Max velocity ({u})"
     return SWEEP_PARAMETERS.get(key, key)
+
+def _config_for_snapshot() -> dict:
+    """Flat config dict for build_snapshot / build_report_zip.
+
+    Algorithm params (ga_pc, ga_pm, ...) come from session_state
+    directly, as before.  ``constraint_policy`` comes from its WIDGET
+    key (``constraint_policy_input``), not the canonical key.  Reason:
+    the canonical key is only synced at run start by
+    _sync_sidebar_state, so if the user changes the dropdown after
+    a run and then saves, the canonical key is stale.  Reading the
+    widget key means the CURRENT selection is saved.
+    """
+    keys = (
+        "ns", "max_gen", "ga_pc", "ga_pm", "ga_sel",
+        "pso_w", "pso_c1", "pso_c2", "n_runs", "exp_seed",
+        "de_f", "de_cr", "de_strategy",
+        "sade_fmin", "sade_fmax", "sade_crmin",
+        "sade_crmax", "sade_conv", "sade_tol",
+        "sade_stag",
+    )
+    cfg = {k: st.session_state[k] for k in keys}
+    cfg["constraint_policy"] = str(
+        st.session_state.get("constraint_policy_input", "deb_prefers")
+    )
+    return cfg
 
 def _render_params_from_meta(meta: dict) -> None:
     """Render widgets for every param in ALGORITHM_META['params'].

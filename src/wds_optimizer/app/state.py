@@ -16,6 +16,7 @@ _KEYS = {
     "de_f": 0.5, "de_cr": 0.3, "de_strategy": "rand/1/bin",
     "sade_fmin": 0.1, "sade_fmax": 0.9, "sade_crmin": 0.1, "sade_crmax": 0.9,
     "sade_conv": True, "sade_tol": 1e-6, "sade_stag": 300,
+    "constraint_policy": "deb_prefers",
     "n_runs": 3, "exp_seed": 1,
     "only_feasible": False,
     "experiment": None,
