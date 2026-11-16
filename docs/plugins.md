@@ -146,6 +146,35 @@ CLI: each invocation runs discovery automatically.
 
 GUI (v0.5.1): "Reload plugins" button in the sidebar.
 
+## GUI
+
+Once a plugin is in the plugins directory (or installed via
+`wds-optimize plugins load`), it appears in the GUI's "Algorithms to
+run" dropdown with a `[P]` prefix:
+
+    [P] My Random Search
+
+Select it like any built-in algorithm.  Its parameters appear in an
+expander below, alongside a "View source code" section so you can
+inspect exactly what the plugin does.
+
+The sidebar's "🔌 Plugins" expander (inside section 3) provides:
+
+- **🔄 Reload** — re-scan the plugins directory without restarting
+  the app.
+- **📂 Open folder** — opens the plugins directory in your file
+  manager.
+- **Load plugin from file** — pick a `.py` file from disk; it is
+  copied into the plugins directory and loaded immediately.
+- **List** of loaded, failed, and skipped plugins.
+
+On first use, a security warning appears; you must acknowledge it
+before managing plugins.
+
+**Sweep limitation (v0.5.1):** the Parameter Sweep dropdown lists
+only built-in algorithm parameters.  Sweeping plugin parameters is
+planned for v0.6.
+
 ## Security
 
 **Plugins are Python code with full system access.**  They can read

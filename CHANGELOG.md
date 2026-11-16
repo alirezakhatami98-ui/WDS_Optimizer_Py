@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Plugin system — GUI integration (v0.5.1)
+- Plugins appear in the "Algorithms to run" dropdown with a `[P]`
+  marker, alongside built-in algorithms.  No new concept, no
+  separate panel — plugins are just algorithms.
+- New "🔌 Plugins" expander in the sidebar (section 3):
+  - 🔄 Reload — re-scan the plugins directory without restarting.
+  - 📂 Open folder — opens the plugins directory in the file
+    manager.
+  - Load plugin from file — pick a `.py` file; it is copied into the
+    plugins directory and loaded immediately.
+  - List of loaded, failed, and skipped plugins with error details.
+- First-use security warning: users must acknowledge that plugins
+  are Python code with full system access before managing them.
+- "View source code" expander inside each plugin's parameter panel,
+  showing the plugin's `run()` source read-only.
+- `reset_plugins()` is now public (was `_reset_for_tests`).
+
+### Added
+
 #### Plugin system — backend (v0.5.0)
 - New `wds_optimizer/plugins.py` module: discovery, loading,
   validation, and registration of user-provided algorithms.

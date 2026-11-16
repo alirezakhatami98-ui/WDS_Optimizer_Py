@@ -76,6 +76,10 @@ from wds_optimizer.history import (
     HistoryEntry, auto_name, new_entry,
     history_to_dict, load_history, to_dict as history_entry_to_dict,
 )
+from wds_optimizer.plugins import (
+    discover_plugins, get_plugin_short_ids, last_report,
+    load_plugin_from_file, plugins_dir, reset_plugins,
+)
 
 # =====================================================================
 #  Page config & cached resources
@@ -465,23 +469,42 @@ def _render_sidebar():
 
         # Then the existing algorithm multiselect
         algo = st.multiselect(
-            "Algorithms to run", list_algorithms(), key="algo_input",
+            "Algorithms to run",
+            options=list_algorithms(),
+            format_func=_algo_display_label,
+            key="algo_input",
             help="Every selected algorithm runs with the same number "
-                 "of runs and seeds.",
+                 "of runs and seeds.  [P] marks user-installed plugins.",
         )
         if not algo:
             st.caption("Select at least one algorithm.")
 
+        _plugin_ids_now = get_plugin_short_ids()
         for short_id in algo:
             entry = ALGORITHM_REGISTRY.get(short_id)
             if entry is None:
                 continue
             meta = entry["meta"]
-            with st.expander(
-                f"{meta['display_name']} parameters", expanded=True,
-            ):
+            is_plugin = short_id in _plugin_ids_now
+            label = f"{meta['display_name']} parameters"
+            if is_plugin:
+                label = f"🔌 {label}"
+            with st.expander(label, expanded=True):
                 st.caption(meta["description"])
                 _render_params_from_meta(meta)
+                if is_plugin:
+                    with st.expander("View source code",
+                                     expanded=False):
+                        _render_plugin_source(entry["run"])
+
+        # Plugins management (below algorithm selection + params).
+        _loaded_ids = get_plugin_short_ids()
+        _plugins_header = (
+            f"🔌 Plugins ({len(_loaded_ids)} loaded)"
+            if _loaded_ids else "🔌 Plugins"
+        )
+        with st.expander(_plugins_header, expanded=False):
+            _render_plugins_panel()    
 
         st.divider()
         st.header("4. Experiment")
@@ -607,7 +630,10 @@ def _render_sidebar():
                 placeholder="e.g. 0.6, 0.7, 0.8, 0.9",
             )
             sweep_algo = st.multiselect(
-                "Algorithms", list_algorithms(), default=["GA"],
+                "Algorithms",
+                options=list_algorithms(),
+                format_func=_algo_display_label,
+                default=["GA"],
                 key="sweep_algo_input",
             )
             sweep_runs = st.number_input(
@@ -696,6 +722,162 @@ def _sweep_param_label(key: str, units: dict | None = None) -> str:
         u = (units or {}).get("VelocityUnit", "m/s")
         return f"Max velocity ({u})"
     return SWEEP_PARAMETERS.get(key, key)
+
+def _algo_display_label(sid: str) -> str:
+    """Format an algorithm short_id for the GUI dropdown.
+
+    Plugins are prefixed with ``[P]`` so users can distinguish them
+    from built-in algorithms at a glance.  Display uses the
+    algorithm's display_name (from META) when available.
+    """
+    entry = ALGORITHM_REGISTRY.get(sid)
+    if entry is None:
+        return sid
+    display = entry["meta"].get("display_name", sid)
+    if sid in get_plugin_short_ids():
+        return f"[P] {display}"
+    return display
+
+def _discover_plugins_if_needed() -> None:
+    """Run plugin discovery once per session.
+
+    Subsequent reruns skip it (the ``_plugins_discovered`` flag is
+    set after the first call).  The "🔄 Reload" button in the
+    Plugins panel resets the flag to force a re-scan.
+    """
+    if st.session_state.get("_plugins_discovered"):
+        return
+    try:
+        report = discover_plugins(verbose=False)
+        st.session_state._plugins_report = report
+        st.session_state._plugins_error = None
+    except Exception as e:
+        st.session_state._plugins_report = None
+        st.session_state._plugins_error = (
+            f"{type(e).__name__}: {e}"
+        )
+    st.session_state._plugins_discovered = True
+
+def _render_plugin_source(run_fn) -> None:
+    """Show the source code of a plugin's run() function, read-only."""
+    try:
+        import inspect
+        source = inspect.getsource(run_fn)
+        st.code(source, language="python")
+    except (OSError, TypeError) as e:
+        st.caption(f"Source not available: {e}")
+
+def _render_plugins_panel() -> None:
+    """Manage loaded plugins: reload, install from file, view errors."""
+    from pathlib import Path
+
+    report = (st.session_state.get("_plugins_report")
+              or last_report())
+    pdir = plugins_dir()
+    plugin_ids = get_plugin_short_ids()
+
+    # ---- First-time security warning ----
+    if not st.session_state.get("_plugins_security_ack"):
+        st.warning(
+            "⚠ Plugins are Python code with full system access. "
+            "Only install plugins from sources you trust. "
+            "There is no sandbox in v0.5."
+        )
+        ack = st.checkbox(
+            "I understand and accept the risk.",
+            key="plugins_security_ack_widget",
+        )
+        if ack:
+            st.session_state._plugins_security_ack = True
+            st.rerun()
+        return
+
+    # ---- Directory + actions ----
+    st.caption(f"Directory: `{pdir}`")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🔄 Reload", width="stretch",
+                     key="plugins_reload",
+                     help="Re-scan the plugins directory."):
+            try:
+                reset_plugins()
+                new_report = discover_plugins(verbose=False)
+                st.session_state._plugins_report = new_report
+                st.session_state._plugins_error = None
+                st.rerun()
+            except Exception as e:
+                st.error(f"Reload failed: {type(e).__name__}: {e}")
+    with c2:
+        if st.button("📂 Open folder", width="stretch",
+                     key="plugins_open_folder"):
+            try:
+                pdir.mkdir(parents=True, exist_ok=True)
+                import subprocess
+                import sys as _sys
+                if _sys.platform == "win32":
+                    subprocess.Popen(["explorer", str(pdir)])
+                elif _sys.platform == "darwin":
+                    subprocess.Popen(["open", str(pdir)])
+                else:
+                    subprocess.Popen(["xdg-open", str(pdir)])
+            except Exception as e:
+                st.caption(f"Could not open folder: {e}")
+
+    # ---- Install from file ----
+    uploaded = st.file_uploader(
+        "Load plugin from file",
+        type=["py"], key="plugins_upload",
+        label_visibility="collapsed",
+    )
+    if uploaded is not None:
+        if st.button(
+            "Install uploaded plugin",
+            key="plugins_install_upload", width="stretch",
+        ):
+            try:
+                pdir.mkdir(parents=True, exist_ok=True)
+                dst = pdir / uploaded.name
+                dst.write_bytes(uploaded.getvalue())
+                result = load_plugin_from_file(dst, verbose=False)
+                if result.status == "loaded":
+                    st.success(f"Loaded {result.short_id}")
+                    # Refresh the cached report
+                    st.session_state._plugins_report = last_report()
+                    st.rerun()
+                else:
+                    st.error(
+                        f"{result.status.capitalize()}: {result.error}"
+                    )
+            except Exception as e:
+                st.error(f"Install failed: {type(e).__name__}: {e}")
+
+    # ---- Discovery error (if any) ----
+    if st.session_state.get("_plugins_error"):
+        st.error(f"Discovery error: {st.session_state._plugins_error}")
+
+    # ---- Loaded plugins ----
+    if plugin_ids:
+        st.markdown(f"**Loaded ({len(plugin_ids)})**")
+        for sid in sorted(plugin_ids):
+            meta = ALGORITHM_REGISTRY.get(sid, {}).get("meta", {})
+            display = meta.get("display_name", "?")
+            st.markdown(f"- `{sid}` — {display}")
+    else:
+        st.caption("No plugins loaded.")
+
+    # ---- Errors from last discovery ----
+    if report.failed:
+        st.markdown(f"**Failed ({len(report.failed)})**")
+        for path, err in report.failed:
+            with st.expander(
+                f"❌ {Path(path).name}", expanded=False,
+            ):
+                st.caption(f"`{path}`")
+                st.code(err)
+    if report.skipped:
+        st.markdown(f"**Skipped ({len(report.skipped)})**")
+        for path, reason in report.skipped:
+            st.caption(f"`{Path(path).name}` — {reason}")
 
 def _entry_from_sidebar(name: str) -> HistoryEntry:
     """Build a HistoryEntry (Draft, no result) from current sidebar.
@@ -3104,6 +3286,7 @@ def _build_excel_export(result: ExperimentResult) -> bytes:
 def main():
     init_state()
     _header()
+    _discover_plugins_if_needed()
 
     actions = _render_sidebar()
 

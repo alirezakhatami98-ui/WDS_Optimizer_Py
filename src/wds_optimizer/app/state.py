@@ -34,6 +34,10 @@ _KEYS = {
     "history_rename_id": None,    # entry_id being renamed
     "history_delete_id": None,    # entry_id pending delete
     "_clear_run_name": False,     # sentinel: clear run_name_input next run
+    "_plugins_discovered": False,    # discovery runs once per session
+    "_plugins_report": None,         # PluginLoadReport from last discovery
+    "_plugins_security_ack": False,  # user acknowledged plugin warning
+    "_plugins_error": None,          # str if discovery raised
     "network_units":      None,   # dict from detect_network_units
     "network_units_prev": None,   # previous units (for auto-convert on switch)
     "job":        None,           # BackgroundJob currently running (or None)

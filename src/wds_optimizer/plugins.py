@@ -343,15 +343,27 @@ def discover_plugins(*, verbose: bool = False) -> PluginLoadReport:
     _LAST_REPORT = report
     return report
 
+def reset_plugins() -> None:
+    """Unregister all plugins and clear the last discovery report.
+
+    Used by the GUI's "Reload plugins" button: after reset, the next
+    ``discover_plugins()`` call rescans the directory from scratch.
+    Built-in algorithms (GA, PSO, DE, SADE) are never touched.
+
+    The CLI does not need this — each invocation runs in a fresh
+    process.
+    """
+    global _LAST_REPORT
+    for sid in list(_PLUGIN_SHORT_IDS):
+        ALGORITHM_REGISTRY.pop(sid, None)
+    _PLUGIN_SHORT_IDS.clear()
+    _LAST_REPORT = None
 
 # ---------------------------------------------------------------------
 #  Test-only reset
 # ---------------------------------------------------------------------
 
 def _reset_for_tests() -> None:
-    """Clear all plugin state.  Tests only — not for public use."""
-    global _LAST_REPORT
-    for sid in list(_PLUGIN_SHORT_IDS):
-        ALGORITHM_REGISTRY.pop(sid, None)
-    _PLUGIN_SHORT_IDS.clear()
-    _LAST_REPORT = None
+    """Alias for reset_plugins().  Kept for backward compatibility
+    with test code written before reset_plugins was public."""
+    reset_plugins()
