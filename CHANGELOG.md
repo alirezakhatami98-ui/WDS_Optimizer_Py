@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### History replaces Scenarios (v0.4.1a)
+- The "6. Scenarios" panel (v0.4.1) has been removed.  It introduced
+  a second concept parallel to "experiment", which was confusing:
+  it was not obvious whether "Run" created an experiment or updated
+  a scenario, and there was no way to edit a scenario's config
+  without loading it into the sidebar.
+- Replaced by "6. History": an automatic list of past runs.  Each
+  entry has a user-editable name, viewable config, and the ability
+  to Load (into sidebar for edit/re-run), Rename, Save as JSON, and
+  Delete.
+- Optional "Run name" field above the Run button names the next run.
+  Left empty, an auto-generated name is used (e.g.
+  "GA+SADE / hanoi / ns=100 / seed=42").  Rename anytime via ✏️.
+- History is session-local.  Use "💾 Save all" / "Load" to transfer
+  across sessions or machines.
+- No more "Duplicate" button — Load + edit + Run naturally creates
+  a new entry.
+- No more "Active scenario" concept — every run is recorded; the
+  experiment you just ran is always the most recent History entry.
+
+### Removed
+
+- `src/wds_optimizer/scenario.py` and `tests/test_scenario.py`.
+  Superseded by `history.py` (v0.4.1a).  The Scenario concept (pre-
+  planning of multiple experiments + batch execution) is deferred;
+  if it returns in v0.5, it will build on top of History rather than
+  parallel to it.
+
+### Added
+
 #### Scenarios (v0.4.1)
 - "6. Scenarios" panel in the sidebar.  Users can:
   - Save the current sidebar configuration as a named scenario
@@ -105,10 +135,6 @@ benchmark reproducibility verified by the test suite.
   Simple GA.  Fixed to compare GA against Simpson 1994's Simple GA
   ($6.112M), which is the correct reference for this algorithm
   class.
-
-### Changed
-
-- `pyproject.toml` `[project]` version bumped to 0.2.0.
 
 ### Notes
 

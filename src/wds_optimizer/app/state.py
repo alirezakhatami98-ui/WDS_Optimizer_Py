@@ -29,9 +29,11 @@ _KEYS = {
     "compare_result": None,
     "report_zip":      None,
     "report_filename": None,
-    "workspace": None,           # lazily created in _render_sidebar
-    "new_scenario_name": "",     # text input state
-    "pending_delete": None,      # scenario id awaiting delete confirmation
+    "history": [],                # list of HistoryEntry
+    "run_name_input": "",         # optional name before Run
+    "history_rename_id": None,    # entry_id being renamed
+    "history_delete_id": None,    # entry_id pending delete
+    "_clear_run_name": False,     # sentinel: clear run_name_input next run
     "network_units":      None,   # dict from detect_network_units
     "network_units_prev": None,   # previous units (for auto-convert on switch)
     "job":        None,           # BackgroundJob currently running (or None)

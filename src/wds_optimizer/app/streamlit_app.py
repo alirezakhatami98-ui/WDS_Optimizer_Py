@@ -72,10 +72,9 @@ from wds_optimizer.app.compare import (
     compute_comparison_stats, overall_stats,
 )
 from wds_optimizer.reporting.report import build_report_zip
-from wds_optimizer.scenario import (
-    Scenario, Workspace,
-    new_scenario, clone_scenario,
-    workspace_to_dict, load_workspace,
+from wds_optimizer.history import (
+    HistoryEntry, auto_name, new_entry,
+    history_to_dict, load_history, to_dict as history_entry_to_dict,
 )
 
 # =====================================================================
@@ -486,6 +485,20 @@ def _render_sidebar():
 
         st.divider()
         st.header("4. Experiment")
+
+        # Clear run name after a successful run (sentinel).
+        if st.session_state.pop("_clear_run_name", False):
+            st.session_state.run_name_input = ""
+
+        st.text_input(
+            "Run name (optional)",
+            key="run_name_input",
+            placeholder="Leave empty for auto-generated name",
+            help="A friendly label for this run in History.  "
+                 "Auto-generated if left empty.  Rename later "
+                 "with ✏️ in the History list.",
+        )
+
         st.number_input("Runs per algorithm", min_value=1, max_value=50,
                         step=1, key="n_runs_input")
         st.number_input("Experiment seed", min_value=0,
@@ -570,11 +583,11 @@ def _render_sidebar():
                     _restore_from_snapshot(data)   # includes st.rerun()
                 except Exception as e:
                     st.error(f"Load failed: {e}")
-
-        # ---- 6. Scenarios ----
+        
+        # ---- 6. History ----
         st.divider()
-        st.header("6. Scenarios")
-        _render_scenarios_section()
+        st.header("6. History")
+        _render_history_section()
         
         # ---- 7. Sweep ----
         st.divider()
@@ -684,18 +697,12 @@ def _sweep_param_label(key: str, units: dict | None = None) -> str:
         return f"Max velocity ({u})"
     return SWEEP_PARAMETERS.get(key, key)
 
-def _scenario_from_sidebar(name: str) -> Scenario:
-    """Build a Draft scenario from the current sidebar configuration.
+def _entry_from_sidebar(name: str) -> HistoryEntry:
+    """Build a HistoryEntry (Draft, no result) from current sidebar.
 
-    Reads **widget keys** (``pmin_input``, ``ga_pc_input``, ...) rather
-    than canonical keys (``pmin``, ``ga_pc``, ...).  Reason: canonical
-    keys are only synced by ``_sync_sidebar_state`` at the start of a
-    run.  If the user has edited a widget since the last run, the
-    canonical key is stale — using it would save a scenario that does
-    not match what is currently on screen.
-
-    Raises ``ValueError`` if input files are not loaded or the network
-    units cannot be determined.
+    Reads widget keys (``pmin_input``, ``ga_pc_input``, etc.), not
+    canonical keys, so the entry reflects what is on screen — not
+    what was last synced by a previous Run.
     """
     from wds_optimizer.algorithms.registry import ALGORITHM_REGISTRY
     from wds_optimizer.hydraulics.units import (
@@ -707,11 +714,8 @@ def _scenario_from_sidebar(name: str) -> Scenario:
 
     units = st.session_state.get("network_units")
     if units is None:
-        raise ValueError(
-            "Network units not detected — reload the .inp file."
-        )
+        raise ValueError("Network units not detected — reload .inp.")
 
-    # ---- Constraints: read from widget keys ----
     constraints = {
         "Pmin": {
             "enabled": bool(st.session_state.get("use_pmin_input", True)),
@@ -735,21 +739,19 @@ def _scenario_from_sidebar(name: str) -> Scenario:
         },
     }
 
-    # ---- Algorithm params: read from widget keys (already correct) ----
     algorithms = list(st.session_state.get("algo_input", []))
     algo_params: dict[str, dict] = {}
     for short_id in algorithms:
-        entry = ALGORITHM_REGISTRY.get(short_id)
-        if entry is None:
+        entry_meta = ALGORITHM_REGISTRY.get(short_id)
+        if entry_meta is None:
             continue
         params: dict = {}
-        for p in entry["meta"]["params"]:
+        for p in entry_meta["meta"]["params"]:
             wk = p["key"] + "_input"
             params[p["key"]] = st.session_state.get(wk, p["default"])
         algo_params[short_id] = params
 
-    # ---- Scalar config: read from widget keys ----
-    return new_scenario(
+    return new_entry(
         name=name,
         inp_path=st.session_state.inp_path,
         d_path=st.session_state.d_path,
@@ -768,76 +770,128 @@ def _scenario_from_sidebar(name: str) -> Scenario:
     )
 
 
-def _queue_scenario_load(sc: Scenario) -> None:
-    """Load a scenario's configuration into the sidebar and rerun.
+def _append_to_history(result, elapsed: float, cancelled: bool,
+                       run_name: str) -> None:
+    """Add an entry to history for the just-completed run."""
+    import copy as _copy
+    history = st.session_state.get("history") or []
 
-    Only the *configuration* is loaded, not the scenario's experiment
-    result.  Viewing results of completed scenarios is a v0.4.2
-    feature (batch runs + results panel).  This function clears any
-    current experiment so the tabs do not show stale results from a
-    previous run.
+    auto = auto_name(
+        algorithms=list(result.algorithms),
+        inp_path=st.session_state.get("inp_path", ""),
+        ns=int(result.NS),
+        seed=int(result.experiment_seed),
+    )
+    name = (run_name or "").strip() or auto
 
-    Input files: if the scenario has embedded inputs (the default when
-    saved), write them to temp files and use those paths — this makes
-    the scenario portable even if the original paths no longer exist.
-    Otherwise, use the scenario's original paths (may fail if the user
-    moved the files; that surfaces as an error on Run).
+    snap = st.session_state.get("problem_snapshot") or {}
+    constraints = _constraints_from_snapshot(snap) if snap else {
+        "Pmin": {"enabled": True, "value": 30.0},
+        "Pmax": {"enabled": False, "value": 100.0},
+        "Vmin": {"enabled": False, "value": 0.0},
+        "Vmax": {"enabled": True, "value": 2.5},
+    }
+
+    from wds_optimizer.algorithms.registry import ALGORITHM_REGISTRY
+    algo_params: dict[str, dict] = {}
+    for short_id in result.algorithms:
+        entry_meta = ALGORITHM_REGISTRY.get(short_id)
+        if entry_meta is None:
+            continue
+        params: dict = {}
+        for p in entry_meta["meta"]["params"]:
+            wk = p["key"] + "_input"
+            params[p["key"]] = st.session_state.get(wk, p["default"])
+        algo_params[short_id] = params
+
+    entry = new_entry(
+        name=name,
+        inp_path=st.session_state.get("inp_path", ""),
+        d_path=st.session_state.get("d_path", ""),
+        cost_path=st.session_state.get("cost_path", ""),
+        diam_unit=str(st.session_state.get("diam_unit", "mm")),
+        algorithms=list(result.algorithms),
+        n_runs=int(result.number_of_runs),
+        seed=int(result.experiment_seed),
+        ns=int(result.NS),
+        max_gen=int(result.MaxGen),
+        constraints=constraints,
+        algorithm_params=algo_params,
+        constraint_policy=str(st.session_state.get(
+            "constraint_policy_input", "deb_prefers")),
+        fixed_pipes=str(st.session_state.get("fixed_pipes_input", "")),
+    )
+    entry.experiment = result
+    entry.elapsed_seconds = float(elapsed)
+    entry.status = "Cancelled" if cancelled else "Complete"
+
+    history.append(entry)
+    st.session_state.history = history
+
+
+def _load_history_config(entry: HistoryEntry) -> None:
+    """Load an entry's config into the sidebar.
+
+    Writes embedded inputs to temp files (so an entry is portable even
+    if its original paths are gone).  Clears any current experiment so
+    tabs don't show stale results.  The entry's *result* is not loaded
+    — to see it, use the Compare tab with the entry's saved JSON, or
+    just Run again to produce fresh results with the same config.
     """
     import uuid as _uuid
     from wds_optimizer.algorithms.registry import ALGORITHM_REGISTRY
     from wds_optimizer.hydraulics.units import (
         detect_network_units, pressure_from_si, velocity_from_si,
     )
-    from wds_optimizer.scenario import to_dict as _scenario_to_dict
 
-    # ---- Resolve input file paths ----
-    data = _scenario_to_dict(sc, embed_inputs=True)
+    # ---- Input files ----
+    data = history_entry_to_dict(entry, embed_inputs=True)
     embedded = data.get("inputs", {})
-    tmpdir = Path(tempfile.gettempdir()) / "wds_optimizer_scenario"
+    tmpdir = Path(tempfile.gettempdir()) / "wds_optimizer_history"
     tmpdir.mkdir(parents=True, exist_ok=True)
     uid = _uuid.uuid4().hex[:8]
 
     if embedded.get("inp"):
-        inp_p = tmpdir / f"{uid}.inp"
-        inp_p.write_text(embedded["inp"], encoding="utf-8")
-        new_inp_path = str(inp_p)
+        p = tmpdir / f"{uid}.inp"
+        p.write_text(embedded["inp"], encoding="utf-8")
+        new_inp = str(p)
     else:
-        new_inp_path = sc.inp_path
+        new_inp = entry.inp_path
 
     if embedded.get("D_txt"):
-        d_p = tmpdir / f"{uid}_D.txt"
-        d_p.write_text(embedded["D_txt"], encoding="utf-8")
-        new_d_path = str(d_p)
+        p = tmpdir / f"{uid}_D.txt"
+        p.write_text(embedded["D_txt"], encoding="utf-8")
+        new_d = str(p)
     else:
-        new_d_path = sc.d_path
+        new_d = entry.d_path
 
     if embedded.get("cost_txt"):
-        c_p = tmpdir / f"{uid}_Cost.txt"
-        c_p.write_text(embedded["cost_txt"], encoding="utf-8")
-        new_cost_path = str(c_p)
+        p = tmpdir / f"{uid}_Cost.txt"
+        p.write_text(embedded["cost_txt"], encoding="utf-8")
+        new_cost = str(p)
     else:
-        new_cost_path = sc.cost_path
+        new_cost = entry.cost_path
 
-    # ---- Detect units on the resolved file ----
+    # ---- Units on the new file ----
     try:
         import wntr
-        wn_units = detect_network_units(
-            wntr.network.WaterNetworkModel(new_inp_path))
+        new_units = detect_network_units(
+            wntr.network.WaterNetworkModel(new_inp))
     except Exception:
-        wn_units = st.session_state.get("network_units") or {
+        new_units = st.session_state.get("network_units") or {
             "System": "SI", "PressureUnit": "m",
             "VelocityUnit": "m/s", "LengthUnit": "m",
             "DiameterUnit": "mm",
         }
 
-    # ---- Canonical keys (immediate) ----
-    st.session_state.inp_path = new_inp_path
-    st.session_state.d_path = new_d_path
-    st.session_state.cost_path = new_cost_path
-    st.session_state.diam_unit = sc.diam_unit
-    st.session_state.network_units = wn_units
+    # ---- Canonical keys ----
+    st.session_state.inp_path = new_inp
+    st.session_state.d_path = new_d
+    st.session_state.cost_path = new_cost
+    st.session_state.diam_unit = entry.diam_unit
+    st.session_state.network_units = new_units
 
-    # ---- Clear any current experiment so tabs don't show stale data ----
+    # ---- Clear stale experiment ----
     st.session_state.experiment = None
     st.session_state.problem_snapshot = None
     st.session_state.best_algo = None
@@ -850,34 +904,34 @@ def _queue_scenario_load(sc: Scenario) -> None:
     st.session_state.hydraulics_converged = False
     _clear_run_ui_state()
 
-    # ---- Widget-key updates (queued, applied on next render) ----
-    updates: dict = {
-        "algo_input": list(sc.algorithms),
-        "ns_input": int(sc.ns),
-        "max_gen_input": int(sc.max_gen),
-        "n_runs_input": int(sc.n_runs),
-        "exp_seed_input": int(sc.seed),
-        "constraint_policy_input": str(sc.constraint_policy),
-        "fixed_pipes_input": str(sc.fixed_pipes or ""),
-        "diam_unit_input": sc.diam_unit,
+    # ---- Widget updates ----
+    updates = {
+        "algo_input": list(entry.algorithms),
+        "ns_input": int(entry.ns),
+        "max_gen_input": int(entry.max_gen),
+        "n_runs_input": int(entry.n_runs),
+        "exp_seed_input": int(entry.seed),
+        "constraint_policy_input": str(entry.constraint_policy),
+        "fixed_pipes_input": str(entry.fixed_pipes or ""),
+        "diam_unit_input": entry.diam_unit,
         "pmin_input": float(pressure_from_si(
-            sc.constraints["Pmin"]["value"], wn_units)),
+            entry.constraints["Pmin"]["value"], new_units)),
         "pmax_input": float(pressure_from_si(
-            sc.constraints["Pmax"]["value"], wn_units)),
+            entry.constraints["Pmax"]["value"], new_units)),
         "vmin_input": float(velocity_from_si(
-            sc.constraints["Vmin"]["value"], wn_units)),
+            entry.constraints["Vmin"]["value"], new_units)),
         "vmax_input": float(velocity_from_si(
-            sc.constraints["Vmax"]["value"], wn_units)),
-        "use_pmin_input": bool(sc.constraints["Pmin"]["enabled"]),
-        "use_pmax_input": bool(sc.constraints["Pmax"]["enabled"]),
-        "use_vmin_input": bool(sc.constraints["Vmin"]["enabled"]),
-        "use_vmax_input": bool(sc.constraints["Vmax"]["enabled"]),
+            entry.constraints["Vmax"]["value"], new_units)),
+        "use_pmin_input": bool(entry.constraints["Pmin"]["enabled"]),
+        "use_pmax_input": bool(entry.constraints["Pmax"]["enabled"]),
+        "use_vmin_input": bool(entry.constraints["Vmin"]["enabled"]),
+        "use_vmax_input": bool(entry.constraints["Vmax"]["enabled"]),
     }
-    for short_id, params in sc.algorithm_params.items():
-        entry = ALGORITHM_REGISTRY.get(short_id)
-        if entry is None:
+    for short_id, params in entry.algorithm_params.items():
+        entry_meta = ALGORITHM_REGISTRY.get(short_id)
+        if entry_meta is None:
             continue
-        for p in entry["meta"]["params"]:
+        for p in entry_meta["meta"]["params"]:
             if p["key"] in params:
                 updates[p["key"] + "_input"] = params[p["key"]]
 
@@ -885,211 +939,159 @@ def _queue_scenario_load(sc: Scenario) -> None:
     st.rerun()
 
 
-def _record_run_in_active_scenario(
-    result, elapsed: float, cancelled: bool,
-) -> None:
-    """If there is an active scenario, record this run into it.
-
-    Called from ``_finalize_run`` after the experiment result is
-    stored on session_state.  Draft scenarios become Complete (or
-    Failed on cancel).  Scenarios without an active pointer are
-    untouched.
-    """
-    ws = st.session_state.get("workspace")
-    if ws is None:
-        return
-    active = ws.active()
-    if active is None:
-        return
-    active.experiment = result
-    active.elapsed_seconds = float(elapsed)
-    if cancelled:
-        active.status = "Failed"
-        active.error = "Cancelled by user"
-    else:
-        active.status = "Complete"
-        active.error = None
-
-
-def _render_scenarios_section() -> None:
-    """Render the Scenarios panel in the sidebar (v0.4.1).
-
-    Read-only for results — scenario results are viewable in v0.4.2
-    via the batch runs + results panel.  For v0.4.1, the panel
-    supports: create, load (into sidebar), duplicate, delete,
-    workspace save/load.
-    """
+def _render_history_section() -> None:
+    """Render the History panel in the sidebar."""
     import json as _json
-    from wds_optimizer.scenario import Workspace
 
-    # Clear the scenario-name input if a previous run requested it.
-    # Must happen BEFORE st.text_input(key="new_scenario_name") is
-    # instantiated; Streamlit forbids modifying a widget's key in the
-    # same run after the widget exists.
-    if st.session_state.pop("_clear_scenario_name", False):
-        st.session_state.new_scenario_name = ""
+    history: list[HistoryEntry] = st.session_state.get("history") or []
 
-    if st.session_state.get("workspace") is None:
-        st.session_state.workspace = Workspace()
-    ws: Workspace = st.session_state.workspace
-
-    active = ws.active()
-    if active is not None:
-        st.caption(
-            f"Active scenario: **{active.name}** "
-            f"`{active.status}`"
-        )
-    else:
-        st.caption("No active scenario. Save current config below.")
-
-    # ---- Workspace save / load ----
     c_save, c_load = st.columns(2)
     with c_save:
-        try:
-            ws_dict = workspace_to_dict(ws)
+        if history:
             st.download_button(
-                "💾 Workspace",
+                "💾 Save all",
                 data=_json.dumps(
-                    ws_dict, indent=2, ensure_ascii=False,
+                    history_to_dict(history),
+                    indent=2, ensure_ascii=False,
                 ).encode("utf-8"),
                 file_name=(
-                    f"wds_workspace_"
+                    f"wds_history_"
                     f"{datetime.now():%Y%m%d_%H%M%S}.json"
                 ),
                 mime="application/json",
                 width="stretch",
-                disabled=(len(ws.list()) == 0),
+                help="Download the whole history as one JSON.  "
+                     "Reload with 'Load' below.",
             )
-        except Exception as e:
-            st.caption(f"Cannot serialize workspace: {e}")
+        else:
+            st.button("💾 Save all", width="stretch",
+                      disabled=True, key="hist_save_disabled")
     with c_load:
-        ws_upload = st.file_uploader(
-            "Load workspace", type=["json"], key="ws_upload",
+        hist_upload = st.file_uploader(
+            "Load", type=["json"], key="hist_upload",
             label_visibility="collapsed",
         )
-    if ws_upload is not None:
+    if hist_upload is not None:
         if st.button(
-            "Load workspace (replaces current)",
-            width="stretch", key="ws_load_confirm",
+            "Load (replaces current history)",
+            width="stretch", key="hist_load_confirm",
         ):
             try:
-                st.session_state.workspace = load_workspace(ws_upload)
+                st.session_state.history = load_history(hist_upload)
                 st.rerun()
             except Exception as e:
                 st.error(f"Load failed: {type(e).__name__}: {e}")
 
-    # ---- Scenario list ----
-    scenarios = ws.list()
-    if scenarios:
-        with st.expander(
-            f"Scenarios ({len(scenarios)})", expanded=True,
-        ):
-            for sc in scenarios:
-                _render_one_scenario_row(sc, ws)
+    if not history:
+        st.caption(
+            "No history yet.  Each run is added automatically.  "
+            "History is session-local; use 'Save all' to preserve."
+        )
+        return
+
+    if st.button("🗑 Clear all history", width="stretch",
+                 key="hist_clear_all",
+                 help="Removes all entries; cannot be undone."):
+        st.session_state.history = []
+        st.rerun()
+
+    for entry in reversed(history):
+        _render_one_history_row(entry)
+
+
+def _render_one_history_row(entry: HistoryEntry) -> None:
+    # Status + cost
+    best_cost = None
+    if entry.experiment is not None:
+        for runs in entry.experiment.runs.values():
+            for r in runs:
+                if r.feasible and (
+                    best_cost is None or r.score < best_cost
+                ):
+                    best_cost = r.score
+
+    if entry.status == "Complete":
+        badge = "✓"
+        cost_str = f"${best_cost:,.0f}" if best_cost is not None \
+                   else "infeasible"
+    elif entry.status == "Cancelled":
+        badge = "⏹"; cost_str = "cancelled"
+    elif entry.status == "Failed":
+        badge = "✗"; cost_str = "failed"
     else:
-        st.caption("No scenarios yet.")
+        badge = "?"; cost_str = entry.status
 
-    # ---- Save current config as new scenario ----
-    st.markdown("**Save current config**")
-    name = st.text_input(
-        "Scenario name", key="new_scenario_name",
-        placeholder="e.g. GA / Pc=0.8 / Hanoi",
-        label_visibility="collapsed",
-    )
-    c_new, c_upd = st.columns(2)
-    with c_new:
-        if st.button(
-            "💾 Save as new", width="stretch",
-            key="scenario_save_new",
-            disabled=not name.strip(),
-        ):
-            try:
-                sc = _scenario_from_sidebar(name.strip())
-                ws.add(sc)
-                # Do NOT set st.session_state.new_scenario_name here:
-                # the widget with that key has already been created in
-                # this run.  Queue the clear for the next run instead.
-                st.session_state._clear_scenario_name = True
+    # Rename mode
+    if st.session_state.get("history_rename_id") == entry.entry_id:
+        new_name = st.text_input(
+            "New name", value=entry.name,
+            key=f"rename_input_{entry.entry_id}",
+            label_visibility="collapsed",
+        )
+        c_save, c_cancel = st.columns(2)
+        with c_save:
+            if st.button("Save", width="stretch", type="primary",
+                         key=f"rn_save_{entry.entry_id}"):
+                entry.name = new_name.strip() or entry.name
+                st.session_state.history_rename_id = None
                 st.rerun()
-            except Exception as e:
-                st.error(f"Could not save: {e}")
-    with c_upd:
-        if st.button(
-            "🔄 Update active", width="stretch",
-            key="scenario_update_active",
-            disabled=(ws.active() is None),
-            help="Overwrite the active scenario's config with the "
-                 "current sidebar.  Clears the scenario's result.",
-        ):
-            try:
-                new_sc = _scenario_from_sidebar(ws.active().name)
-                new_sc.scenario_id = ws.active().scenario_id
-                new_sc.created_at = ws.active().created_at
-                ws.scenarios[new_sc.scenario_id] = new_sc
+        with c_cancel:
+            if st.button("Cancel", width="stretch",
+                         key=f"rn_cancel_{entry.entry_id}"):
+                st.session_state.history_rename_id = None
                 st.rerun()
-            except Exception as e:
-                st.error(f"Could not update: {e}")
+        return
 
-
-def _render_one_scenario_row(sc: Scenario, ws: Workspace) -> None:
-    """One row: name+status, load, duplicate, delete (with confirm).
-
-    Buttons use short text labels rather than emoji-only.  Emoji-only
-    labels render as tofu (empty boxes) on some Windows + browser
-    combinations where Streamlit's button font does not fall back to
-    Segoe UI Emoji; the tooltip still works but the user has no
-    on-screen hint.  Short labels ("Load", "Copy", "Delete") are
-    readable everywhere.
-    """
-    is_active = (sc.scenario_id == ws.active_scenario_id)
-    marker = "▶" if is_active else " "
-    # Narrow button columns but wide enough for 3-6 character labels.
-    cols = st.columns([4, 1, 1, 1])
-    with cols[0]:
-        st.markdown(f"{marker} **{sc.name}** `{sc.status}`")
-    with cols[1]:
-        if st.button(
-            "Load", key=f"sc_load_{sc.scenario_id}",
-            help="Load config into sidebar",
-            width="stretch",
-        ):
-            _queue_scenario_load(sc)
-    with cols[2]:
-        if st.button(
-            "Copy", key=f"sc_dup_{sc.scenario_id}",
-            help="Duplicate (new scenario, no result)",
-            width="stretch",
-        ):
-            ws.add(clone_scenario(sc, sc.name + " (copy)"))
+    # Normal display
+    c_name, c_load, c_rename, c_save, c_del = st.columns([4, 1, 1, 1, 1])
+    with c_name:
+        st.markdown(f"**{entry.name}** {badge} {cost_str}")
+    with c_load:
+        if st.button("📂", key=f"hl_{entry.entry_id}",
+                     help="Load config into sidebar (edit and re-run)"):
+            _load_history_config(entry)
+    with c_rename:
+        if st.button("✏️", key=f"hr_{entry.entry_id}",
+                     help="Rename"):
+            st.session_state.history_rename_id = entry.entry_id
             st.rerun()
-    with cols[3]:
-        if st.button(
-            "Delete", key=f"sc_del_{sc.scenario_id}",
-            help="Delete (requires confirmation)",
-            width="stretch",
-        ):
-            st.session_state.pending_delete = sc.scenario_id
+    with c_save:
+        import json as _json
+        st.download_button(
+            "💾",
+            data=_json.dumps(
+                history_entry_to_dict(entry),
+                indent=2, ensure_ascii=False,
+            ).encode("utf-8"),
+            file_name=f"{entry.name[:40] or 'entry'}.json",
+            mime="application/json",
+            key=f"hs_{entry.entry_id}",
+            help="Download this entry as JSON (can be uploaded in "
+                 "Compare tab or re-loaded here).",
+        )
+    with c_del:
+        if st.button("🗑", key=f"hd_{entry.entry_id}",
+                     help="Delete"):
+            st.session_state.history_delete_id = entry.entry_id
             st.rerun()
 
-    if st.session_state.get("pending_delete") == sc.scenario_id:
-        st.warning(f"Delete scenario '{sc.name}'?  No undo.")
+    if st.session_state.get("history_delete_id") == entry.entry_id:
+        st.warning(f"Delete **{entry.name}**?  Cannot be undone.")
         cy, cn = st.columns(2)
         with cy:
-            if st.button(
-                "Yes, delete",
-                key=f"sc_confirm_{sc.scenario_id}",
-                width="stretch", type="primary",
-            ):
-                ws.remove(sc.scenario_id)
-                st.session_state.pending_delete = None
+            if st.button("Yes, delete", width="stretch",
+                         type="primary",
+                         key=f"hyd_{entry.entry_id}"):
+                st.session_state.history = [
+                    e for e in st.session_state.history
+                    if e.entry_id != entry.entry_id
+                ]
+                st.session_state.history_delete_id = None
                 st.rerun()
         with cn:
-            if st.button(
-                "Cancel",
-                key=f"sc_cancel_{sc.scenario_id}",
-                width="stretch",
-            ):
-                st.session_state.pending_delete = None
+            if st.button("Cancel", width="stretch",
+                         key=f"hnd_{entry.entry_id}"):
+                st.session_state.history_delete_id = None
                 st.rerun()
 
 def _config_for_snapshot() -> dict:
@@ -1362,7 +1364,7 @@ def _build_base_cfg():
 # once the thread has ended (normally OR after Cancel), stores whatever
 # result exists and reruns the app.
 
-def _start_run(algo_label: str):
+def _start_run(algo_label: str, run_name: str = ""):
     _sync_sidebar_state(with_n_runs=True)
 
     # Clear any stale report from a previous experiment
@@ -1406,7 +1408,8 @@ def _start_run(algo_label: str):
         "run", label="Experiment",
         context={"problem": problem, "units": units, "wn": wn,
                  "algos": algos, "n_runs": n_runs, "summary": summary,
-                 "restart_on": bool(base_cfg.Restart.Enabled)},
+                 "restart_on": bool(base_cfg.Restart.Enabled),
+                 "run_name": run_name},
     )
     job.start(target)
     st.session_state.job = job
@@ -1656,8 +1659,13 @@ def _finalize_run(job: BackgroundJob):
     # New experiment — invalidate run-specific UI state
     _clear_run_ui_state()
 
-    # If there is an active scenario, record this run's result in it
-    _record_run_in_active_scenario(result, elapsed, cancelled)
+    # Append this run to history (auto-named unless user provided name)
+    run_name = str(job.context.get("run_name", "")).strip()
+    try:
+        _append_to_history(result, elapsed, cancelled, run_name)
+        st.session_state._clear_run_name = True
+    except Exception as e:
+        print(f"[finalize_run] history append failed: {e}")
 
     st.rerun()
 
@@ -3101,7 +3109,10 @@ def main():
 
     if actions["run_clicked"]:
         try:
-            _start_run(actions["algo_label"])
+            _start_run(
+                actions["algo_label"],
+                run_name=st.session_state.get("run_name_input", ""),
+            )
         except Exception as e:
             st.error(f"Could not start experiment: {type(e).__name__}: {e}")
             st.exception(e)
