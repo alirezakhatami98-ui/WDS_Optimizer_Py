@@ -233,7 +233,7 @@ def load_plugin_from_file(path: str | Path, *, verbose: bool = False) -> LoadRes
         )
         if verbose:
             print(f"[plugins] {name}: {msg}", file=sys.stderr)
-        return LoadResult("skipped", error=msg)
+        return LoadResult("skipped", short_id=short_id, error=msg)
 
     # ---- short_id collision ----
     short_id = meta.get("short_id", "")
@@ -245,12 +245,12 @@ def load_plugin_from_file(path: str | Path, *, verbose: bool = False) -> LoadRes
 
     if short_id in ALGORITHM_REGISTRY:
         if short_id in _PLUGIN_SHORT_IDS:
-            msg = "already loaded"
+            msg = f"already loaded as {short_id!r}"
         else:
             msg = f"short_id {short_id!r} collides with an existing algorithm"
         if verbose:
             print(f"[plugins] {name}: {msg}", file=sys.stderr)
-        return LoadResult("skipped", error=msg)
+        return LoadResult("skipped", short_id=short_id, error=msg)
 
     # ---- META validation (uses registry's _validate_meta) ----
     try:

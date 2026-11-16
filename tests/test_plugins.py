@@ -216,11 +216,15 @@ def test_discover_idempotent(isolated_plugins):
     _write(isolated_plugins, "a.py", VALID_PLUGIN)
     discover_plugins()
     report2 = discover_plugins()
-    # Second run should report skipped (already loaded)
-    assert "TestAlgo" in report2.loaded or any(
-        "TestAlgo" in s[1] for s in report2.skipped
-    )
-    # At most one registration in ALGORITHM_REGISTRY
+
+    # Second run should report the plugin as skipped (already loaded).
+    # The error message includes the short_id so `plugins list` output
+    # is informative.
+    assert report2.loaded == []
+    assert len(report2.skipped) == 1
+    assert "TestAlgo" in report2.skipped[0][1]
+
+    # The real invariant: exactly one registration in the registry.
     count = sum(1 for k in ALGORITHM_REGISTRY if k == "TestAlgo")
     assert count == 1
 
