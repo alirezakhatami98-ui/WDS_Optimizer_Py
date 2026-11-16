@@ -358,3 +358,42 @@ def test_numpy_arrays_become_lists_in_snapshot():
     assert isinstance(data["problem"]["L"], list)
     assert isinstance(data["problem"]["D_m"], list)
     assert isinstance(data["hydraulics"]["node_pressures"], list)
+
+def test_restore_experiment_tolerates_missing_problem_section():
+    """A History-style dict (no "problem") must restore cleanly.
+
+    Regression for "Compare failed: KeyError: 'problem'" when a user
+    uploaded a History entry JSON to the Compare tab.
+    """
+    from wds_optimizer.persistence.snapshot import restore_experiment
+    from wds_optimizer.history import new_entry, to_dict as entry_to_dict
+
+    # Build a minimal History entry (which produces a dict with no
+    # "problem" section, only "entry" + "experiment").
+    e = new_entry(
+        "test",
+        inp_path="/tmp/x.inp", d_path="/tmp/x.txt", cost_path="/tmp/y.txt",
+        diam_unit="mm", algorithms=["GA"], n_runs=1, seed=1,
+        ns=10, max_gen=5,
+        constraints={
+            "Pmin": {"enabled": True, "value": 30.0},
+            "Pmax": {"enabled": False, "value": 100.0},
+            "Vmin": {"enabled": False, "value": 0.0},
+            "Vmax": {"enabled": True, "value": 2.5},
+        },
+        algorithm_params={"GA": {"ga_pc": 0.8, "ga_pm": 0.03}},
+    )
+    # Add a minimal experiment so restore_experiment has something to
+    # rebuild.  Only the fields restore_experiment reads are required.
+    from wds_optimizer.experiments.runner import ExperimentResult
+    e.experiment = ExperimentResult(
+        experiment_id="x", timestamp=__import__("datetime").datetime.now(),
+        number_of_runs=1, algorithms=["GA"], experiment_seed=1,
+        NS=10, MaxGen=5, Pmin=0.0, Vmax=0.0, NP=0,
+        variable_pipes=[], fixed_pipes=[],
+    )
+    data = entry_to_dict(e, embed_inputs=False)
+    assert "problem" not in data              # sanity
+    result = restore_experiment(data)         # must not raise
+    assert result.experiment_id == "x"
+    assert result.algorithms == ["GA"]

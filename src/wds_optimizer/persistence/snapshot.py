@@ -190,31 +190,40 @@ def load_snapshot(path_or_file) -> dict:
 
 
 def restore_experiment(data: dict) -> ExperimentResult:
-    """Rebuild an ExperimentResult from a loaded snapshot dict."""
+    """Rebuild an ExperimentResult from a snapshot OR a History entry.
+
+    Both formats carry an ``experiment`` section with the same fields
+    (see HistoryEntry / snapshot.build_snapshot).  Snapshots also carry
+    a ``problem`` section with the network's metadata (Pmin, Vmax,
+    pipe lists); History entries do not.  The metadata fields on
+    ExperimentResult are informational — statistical comparisons and
+    GUI display that need them use problem_snapshot separately.  So
+    when ``problem`` is absent, we fill them with defaults rather than
+    raising.
+    """
     exp = data["experiment"]
+    problem = data.get("problem", {})           # may be absent (History)
     result = ExperimentResult(
         experiment_id=exp["experiment_id"],
         timestamp=datetime.now(),
         number_of_runs=exp["number_of_runs"],
-        algorithms=exp["algorithms"],
+        algorithms=list(exp["algorithms"]),
         experiment_seed=exp["experiment_seed"],
         NS=exp["NS"],
         MaxGen=exp["MaxGen"],
-        Pmin=data["problem"]["Pmin"],
-        Vmax=data["problem"]["Vmax"],
-        NP=len(data["problem"]["pipe_names"]),
-        variable_pipes=np.array(data["problem"]["VariablePipes"]),
-        fixed_pipes=np.array(data["problem"]["FixedPipes"]),
-        cancelled=bool(exp.get("cancelled", False)),   # old files: False
-        # Extended constraints.  Backward compat: old snapshots lack
-        # these keys in data["problem"] and use the pre-Pmax/Vmin
-        # defaults (Pmin on, Vmax on, others off).
-        Pmax=float(data["problem"].get("Pmax", 100.0)),
-        Vmin=float(data["problem"].get("Vmin", 0.0)),
-        use_pmin=bool(data["problem"].get("use_pmin", True)),
-        use_pmax=bool(data["problem"].get("use_pmax", False)),
-        use_vmin=bool(data["problem"].get("use_vmin", False)),
-        use_vmax=bool(data["problem"].get("use_vmax", True)),
+        Pmin=float(problem.get("Pmin", 0.0)),
+        Vmax=float(problem.get("Vmax", 0.0)),
+        NP=int(len(problem.get("pipe_names", []))),
+        variable_pipes=np.array(problem.get("VariablePipes", [])),
+        fixed_pipes=np.array(problem.get("FixedPipes", [])),
+        cancelled=bool(exp.get("cancelled", False)),
+        restart=dict(exp.get("restart", {})),
+        Pmax=float(problem.get("Pmax", 100.0)),
+        Vmin=float(problem.get("Vmin", 0.0)),
+        use_pmin=bool(problem.get("use_pmin", True)),
+        use_pmax=bool(problem.get("use_pmax", False)),
+        use_vmin=bool(problem.get("use_vmin", False)),
+        use_vmax=bool(problem.get("use_vmax", True)),
         constraint_policy=(
             exp.get("constraint_policy")
             or data.get("config", {}).get("constraint_policy")

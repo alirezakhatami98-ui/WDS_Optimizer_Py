@@ -146,3 +146,12 @@ def test_empty_history_roundtrip(tmp_path):
     path = tmp_path / "h.json"
     save_history([], path)
     assert load_history(path) == []
+
+def test_load_history_accepts_single_entry(tmp_path):
+    """Uploading a single-entry JSON via Load returns a one-item list."""
+    e = _make_entry(tmp_path, "single")
+    path = tmp_path / "entry.json"
+    save_entry(e, path)
+    loaded = load_history(path)
+    assert len(loaded) == 1
+    assert loaded[0].name == "single"

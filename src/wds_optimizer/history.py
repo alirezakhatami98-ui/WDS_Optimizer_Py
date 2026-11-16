@@ -259,9 +259,24 @@ def save_history(entries: list[HistoryEntry], path: str | Path) -> None:
 
 
 def load_history(path_or_file) -> list[HistoryEntry]:
-    """Load a whole history from a JSON file or file-like object."""
+    """Load a history from a JSON file or file-like object.
+
+    Accepts both:
+    - a full history (``{"entries": [...]}``) — as written by
+      ``save_history`` / the "💾 Save all" button;
+    - a single entry (``{"entry": {...}, "experiment": {...}}``) — as
+      written by ``save_entry`` / the "💾" button on one row.
+
+    Loading a single entry returns a one-element list.  This lets the
+    user upload either kind of file from the same "Load" widget
+    without first needing to distinguish them.
+    """
     if hasattr(path_or_file, "read"):
         data = json.load(path_or_file)
     else:
         data = json.loads(Path(path_or_file).read_text(encoding="utf-8"))
-    return [from_dict(e) for e in data.get("entries", [])]
+    if "entries" in data:
+        return [from_dict(e) for e in data["entries"]]
+    if "entry" in data:
+        return [from_dict(data)]
+    return []
