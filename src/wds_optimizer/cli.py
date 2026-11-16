@@ -41,7 +41,13 @@ from typing import Sequence
 
 import numpy as np
 
-from wds_optimizer.algorithms.registry import list_algorithms
+from wds_optimizer.algorithms.registry import (
+    ALGORITHM_REGISTRY, list_algorithms,
+)
+from wds_optimizer.plugins import (
+    discover_plugins, get_plugin_short_ids, last_report,
+    load_plugin_from_file, plugins_dir,
+)
 from wds_optimizer.optimization.policies import CONSTRAINT_POLICIES
 from wds_optimizer.api import (
     OptimizationRequest,
@@ -52,10 +58,6 @@ from wds_optimizer.hydraulics.units import (
     detect_network_units,
     pressure_to_si,
     velocity_to_si,
-)
-from wds_optimizer.plugins import (
-    discover_plugins, get_plugin_short_ids, last_report,
-    load_plugin_from_file, plugins_dir,
 )
 
 
