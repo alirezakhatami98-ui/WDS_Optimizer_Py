@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Plugin system — backend (v0.5.0)
+- New `wds_optimizer/plugins.py` module: discovery, loading,
+  validation, and registration of user-provided algorithms.
+- Plugin directory: `~/.wds_optimizer/plugins/` (override with
+  `WDS_OPTIMIZER_PLUGINS_DIR`; disable with
+  `WDS_OPTIMIZER_DISABLE_PLUGINS=1`).
+- Each plugin is a single `.py` file exporting `ALGORITHM_META`
+  (same schema as built-ins + required `api_version: 1`) and
+  `run(problem, config, *, progress_callback, cancel_callback, meta)`
+  (same signature as built-ins).
+- Plugin params must use `maps_to: None`; values land in
+  `config.extra[short_id]`.
+- Malformed or failing plugins never crash the app: import errors,
+  missing exports, bad signatures, and META validation failures are
+  all caught and reported in a `PluginLoadReport`.
+- CLI: `wds-optimize plugins list` and `wds-optimize plugins load
+  <path>`.  Every CLI invocation runs discovery automatically, so
+  `--algo MyPlugin` works without extra steps.
+- `plugins/sample_plugin.py` — annotated template.
+- `docs/plugins.md` — full authoring guide with security warning.
+
+### Notes
+
+- **Security:** plugins are Python code with full system access.
+  There is no sandbox in v0.5.  Only install plugins from sources
+  you trust.  Set `WDS_OPTIMIZER_DISABLE_PLUGINS=1` to disable
+  discovery entirely.
+- GUI integration (sidebar expander, reload button, "View source",
+  "Load from file") is planned for v0.5.1.
+- A plugin that fails to load is skipped; other plugins and the
+  four built-ins continue to work normally.
+
+### Added
+
 #### History replaces Scenarios (v0.4.1a)
 - The "6. Scenarios" panel (v0.4.1) has been removed.  It introduced
   a second concept parallel to "experiment", which was confusing:

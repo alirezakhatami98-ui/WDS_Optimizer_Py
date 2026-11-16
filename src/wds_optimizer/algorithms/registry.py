@@ -157,3 +157,7 @@ register("GA",   run=run_ga,   meta=GA_META)
 register("PSO",  run=run_pso,  meta=PSO_META)
 register("DE",   run=run_de,   meta=DE_META)
 register("SADE", run=run_sade, meta=SADE_META)
+
+def _unregister(short_id: str) -> None:
+    """Remove an algorithm from the registry.  Tests only."""
+    ALGORITHM_REGISTRY.pop(short_id, None)

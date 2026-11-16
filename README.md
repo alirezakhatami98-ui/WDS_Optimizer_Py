@@ -153,6 +153,23 @@ streamlit run src/wds_optimizer/app/streamlit_app.py
 | Plugin architecture | 🔜 v0.5 |
 | Paper-faithful GA/PSO/DE presets | 🔜 v0.3 |
 
+## Plugins
+
+You can add your own algorithms without modifying the source code.
+Drop a `.py` file in `~/.wds_optimizer/plugins/` with an
+`ALGORITHM_META` dict and a `run()` function, then:
+
+```bash
+wds-optimize plugins list          # verify it loaded
+wds-optimize run --algo MyAlgo ... # use it
+```
+
+See [docs/plugins.md](docs/plugins.md) and
+[plugins/sample_plugin.py](plugins/sample_plugin.py) for the guide.
+
+**Security:** plugins are Python code with full system access.
+Only install plugins from sources you trust.
+
 ## Tests
 
 ```bash

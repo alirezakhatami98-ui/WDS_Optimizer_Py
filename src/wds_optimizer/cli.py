@@ -53,6 +53,10 @@ from wds_optimizer.hydraulics.units import (
     pressure_to_si,
     velocity_to_si,
 )
+from wds_optimizer.plugins import (
+    discover_plugins, get_plugin_short_ids, last_report,
+    load_plugin_from_file, plugins_dir,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +624,78 @@ def cmd_benchmark(args) -> int:
         args.vmax = 2.5
     return cmd_run(args)
 
+# ---------------------------------------------------------------------------
+#  Subcommand: plugins
+# ---------------------------------------------------------------------------
+
+def cmd_plugins_list(args) -> int:
+    """List loaded plugins and any errors."""
+    report = discover_plugins(verbose=False)
+    pdir = plugins_dir()
+
+    print(f"Plugins directory: {pdir}")
+    if not report.enabled:
+        print("Plugins are disabled via WDS_OPTIMIZER_DISABLE_PLUGINS=1.")
+        return EXIT_OK
+
+    if report.loaded:
+        print(f"\nLoaded plugins ({len(report.loaded)}):")
+        for short_id in report.loaded:
+            meta = ALGORITHM_REGISTRY.get(short_id, {}).get("meta", {})
+            display = meta.get("display_name", "?")
+            print(f"  {short_id}  -  {display}")
+    else:
+        print("\nNo plugins loaded.")
+
+    if report.failed:
+        print(f"\nFailed ({len(report.failed)}):")
+        for path, err in report.failed:
+            print(f"  {path}")
+            print(f"    {err}")
+
+    if report.skipped:
+        print(f"\nSkipped ({len(report.skipped)}):")
+        for path, reason in report.skipped:
+            print(f"  {path}")
+            print(f"    {reason}")
+
+    for w in report.warnings:
+        print(f"\nWarning: {w}")
+
+    return EXIT_OK
+
+
+def cmd_plugins_load(args) -> int:
+    """Copy a plugin file into the plugins directory and load it."""
+    import shutil
+    src = Path(args.path)
+    if not src.exists():
+        print(f"Error: {src} not found", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    if src.suffix != ".py":
+        print(f"Error: {src} is not a .py file", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+
+    pdir = plugins_dir()
+    pdir.mkdir(parents=True, exist_ok=True)
+    dst = pdir / src.name
+    if dst.exists() and not args.force:
+        print(
+            f"Error: {dst} already exists.  Use --force to overwrite.",
+            file=sys.stderr,
+        )
+        return EXIT_INVALID_INPUT
+
+    shutil.copy2(src, dst)
+    print(f"Copied {src.name} -> {dst}")
+
+    result = load_plugin_from_file(dst, verbose=True)
+    if result.status == "loaded":
+        print(f"Loaded {result.short_id!r}")
+        return EXIT_OK
+    print(f"{result.status.capitalize()}: {result.error}", file=sys.stderr)
+    return (EXIT_INVALID_INPUT if result.status == "skipped"
+            else EXIT_UNEXPECTED)
 
 # ---------------------------------------------------------------------------
 #  Argument parser
@@ -743,10 +819,35 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_output_args(p_bench)
     p_bench.set_defaults(func=cmd_benchmark)
 
+    p_pl = sub.add_parser(
+        "plugins", help="Manage user-installed plugins.",
+    )
+    pl_sub = p_pl.add_subparsers(dest="plugins_command", required=True)
+
+    p_pl_list = pl_sub.add_parser("list", help="List plugins.")
+    p_pl_list.set_defaults(func=cmd_plugins_list)
+
+    p_pl_load = pl_sub.add_parser(
+        "load", help="Copy a plugin file into the plugins directory.",
+    )
+    p_pl_load.add_argument("path", help="Path to a .py plugin file.")
+    p_pl_load.add_argument("--force", action="store_true",
+                           help="Overwrite if a plugin with the same "
+                                "filename exists.")
+    p_pl_load.set_defaults(func=cmd_plugins_load)
+
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # Discover plugins BEFORE building the parser, so that
+    # `--algo choices` includes any plugin short_ids.  Failures are
+    # reported to stderr but do not abort the CLI.
+    try:
+        discover_plugins(verbose=False)
+    except Exception as e:
+        print(f"[plugins] discovery error: {e}", file=sys.stderr)
+
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
