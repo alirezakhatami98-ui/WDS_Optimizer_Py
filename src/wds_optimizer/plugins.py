@@ -214,6 +214,15 @@ def load_plugin_from_file(path: str | Path, *, verbose: bool = False) -> LoadRes
         return LoadResult("failed", error=msg)
     meta = module.ALGORITHM_META
 
+    # Extract short_id early so subsequent checks (api_version skip,
+    # collision) can reference it without re-parsing meta.
+    short_id = meta.get("short_id", "")
+    if not isinstance(short_id, str) or not short_id:
+        msg = "ALGORITHM_META['short_id'] must be a non-empty string"
+        if verbose:
+            print(f"[plugins] {name}: {msg}", file=sys.stderr)
+        return LoadResult("failed", error=msg)
+
     if not hasattr(module, "run") or not callable(module.run):
         msg = "missing callable 'run' function"
         if verbose:
@@ -236,13 +245,6 @@ def load_plugin_from_file(path: str | Path, *, verbose: bool = False) -> LoadRes
         return LoadResult("skipped", short_id=short_id, error=msg)
 
     # ---- short_id collision ----
-    short_id = meta.get("short_id", "")
-    if not isinstance(short_id, str) or not short_id:
-        msg = "ALGORITHM_META['short_id'] must be a non-empty string"
-        if verbose:
-            print(f"[plugins] {name}: {msg}", file=sys.stderr)
-        return LoadResult("failed", error=msg)
-
     if short_id in ALGORITHM_REGISTRY:
         if short_id in _PLUGIN_SHORT_IDS:
             msg = f"already loaded as {short_id!r}"
