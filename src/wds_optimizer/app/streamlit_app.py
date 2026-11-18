@@ -254,6 +254,7 @@ def _init_widget_state():
         "use_vmin_input":    bool(st.session_state.get("use_vmin", False)),
         "use_vmax_input":    bool(st.session_state.get("use_vmax", True)),
         "fixed_pipes_input": st.session_state.get("fixed_pipes", ""),
+        "diam_unit_input":   st.session_state.get("diam_unit", "in"),
         "ga_pc_input":       float(st.session_state.get("ga_pc", 0.8)),
         "ga_pm_input":       float(st.session_state.get("ga_pm", 0.03)),
         "ga_sel_input":      st.session_state.get("ga_sel", "tournament"),
@@ -299,7 +300,7 @@ def _render_sidebar():
             "Costs (Cost.txt)", type=["txt"], key="cost_upload"
         )
         diam_unit = st.selectbox(
-            "D.txt unit", ["in", "mm"], index=0, key="diam_unit_input"
+            "D.txt unit", ["in", "mm"], key="diam_unit_input"
         )
 
         if inp_upload and d_upload and cost_upload:
@@ -691,7 +692,7 @@ def _render_sidebar():
                 )
 
             sweep_vals_str = st.text_input(
-                "Values (comma-separated)", value="",
+                "Values (comma-separated)",
                 key="sweep_vals_input",
                 placeholder="e.g. 0.6, 0.7, 0.8, 0.9",
             )
@@ -1428,9 +1429,12 @@ def _render_one_history_row(entry: HistoryEntry) -> None:
 
     # Rename mode
     if st.session_state.get("history_rename_id") == entry.entry_id:
+        rk = f"rename_input_{entry.entry_id}"
+        if rk not in st.session_state:
+            st.session_state[rk] = entry.name
         new_name = st.text_input(
-            "New name", value=entry.name,
-            key=f"rename_input_{entry.entry_id}",
+            "New name",
+            key=rk,
             label_visibility="collapsed",
         )
         c_save, c_cancel = st.columns(2)
@@ -1439,11 +1443,15 @@ def _render_one_history_row(entry: HistoryEntry) -> None:
                          key=f"rn_save_{entry.entry_id}"):
                 entry.name = new_name.strip() or entry.name
                 st.session_state.history_rename_id = None
+                # Clear the rename input so the next rename session
+                # starts from the (possibly new) entry name.
+                st.session_state.pop(rk, None)
                 st.rerun()
         with c_cancel:
             if st.button("Cancel", width="stretch",
                          key=f"rn_cancel_{entry.entry_id}"):
                 st.session_state.history_rename_id = None
+                st.session_state.pop(rk, None)
                 st.rerun()
         return
 
@@ -1459,6 +1467,10 @@ def _render_one_history_row(entry: HistoryEntry) -> None:
         if st.button("✏️", key=f"hr_{entry.entry_id}",
                      help="Rename"):
             st.session_state.history_rename_id = entry.entry_id
+            # Clear any stale text from a previous rename session for
+            # the same entry — otherwise the input shows the previous
+            # typed-but-not-saved name.
+            st.session_state.pop(f"rename_input_{entry.entry_id}", None)
             st.rerun()
     with c_save:
         import json as _json
