@@ -476,15 +476,23 @@ def _render_sidebar():
         # Constraint-handling policy (applies to every selected algorithm)
         st.subheader("Constraint handling")
         _policy_names = list(CONSTRAINT_POLICIES)
-        _current_policy = st.session_state.get(
-            "constraint_policy_input", "deb_prefers",
-        )
-        _idx = (_policy_names.index(_current_policy)
-                if _current_policy in _policy_names else 0)
+        # Ensure session_state holds a valid value BEFORE the widget is
+        # created.  Modifying a widget's key *before* creation is the
+        # supported pattern; modifying it after (or passing both
+        # `index=` and `key=`) triggers Streamlit's warning about a
+        # widget created with a default and also set via the Session
+        # State API.
+        if "constraint_policy_input" not in st.session_state:
+            st.session_state.constraint_policy_input = "deb_prefers"
+        if st.session_state.constraint_policy_input not in _policy_names:
+            # Defensive: a policy was removed from CONSTRAINT_POLICIES
+            # between sessions (very unlikely; the set is closed).
+            st.session_state.constraint_policy_input = (
+                _policy_names[0] if _policy_names else "deb_prefers"
+            )
         _selected_policy = st.selectbox(
             "How should the optimiser compare infeasible designs?",
             options=_policy_names,
-            index=_idx,
             format_func=lambda n: POLICY_META[n]["display_name"],
             key="constraint_policy_input",
             help="This setting applies globally to every algorithm "
@@ -687,11 +695,16 @@ def _render_sidebar():
                 key="sweep_vals_input",
                 placeholder="e.g. 0.6, 0.7, 0.8, 0.9",
             )
+            # Same pattern as constraint_policy: set the session_state
+            # default before creating the widget, then use `key=` only.
+            # This avoids the "created with default AND set via session
+            # state" warning and works correctly on rerun.
+            if "sweep_algo_input" not in st.session_state:
+                st.session_state.sweep_algo_input = ["GA"]
             sweep_algo = st.multiselect(
                 "Algorithms",
                 options=list_algorithms(),
                 format_func=_algo_display_label,
-                default=["GA"],
                 key="sweep_algo_input",
             )
             sweep_runs = st.number_input(
