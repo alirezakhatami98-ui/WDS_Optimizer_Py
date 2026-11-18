@@ -68,6 +68,12 @@ class HistoryEntry:
     error: Optional[str] = None
     elapsed_seconds: Optional[float] = None
 
+    # Sweep tagging (v0.6.1).  Entries created as part of a sweep
+    # share the same sweep_group_id; the History panel groups them.
+    # sweep_meta records which parameter and value this point used.
+    sweep_group_id: Optional[str] = None
+    sweep_meta: Optional[dict] = None
+
 
 def new_entry(
     name: str,
@@ -85,6 +91,8 @@ def new_entry(
     algorithm_params: dict,
     constraint_policy: str = "deb_prefers",
     fixed_pipes: str = "",
+    sweep_group_id: Optional[str] = None,
+    sweep_meta: Optional[dict] = None,
 ) -> HistoryEntry:
     """Create a fresh HistoryEntry."""
     return HistoryEntry(
@@ -102,6 +110,8 @@ def new_entry(
         algorithm_params=copy.deepcopy(algorithm_params),
         constraint_policy=constraint_policy,
         fixed_pipes=fixed_pipes,
+        sweep_group_id=sweep_group_id,
+        sweep_meta=copy.deepcopy(sweep_meta) if sweep_meta else None,
     )
 
 
@@ -145,6 +155,8 @@ def to_dict(entry: HistoryEntry, *, embed_inputs: bool = True) -> dict:
             "status": entry.status,
             "error": entry.error,
             "elapsed_seconds": entry.elapsed_seconds,
+            "sweep_group_id": entry.sweep_group_id,
+            "sweep_meta": copy.deepcopy(entry.sweep_meta),
         },
     }
     if entry.experiment is not None:
@@ -220,6 +232,8 @@ def from_dict(data: dict) -> HistoryEntry:
         status=e.get("status", "Complete"),
         error=e.get("error"),
         elapsed_seconds=e.get("elapsed_seconds"),
+        sweep_group_id=e.get("sweep_group_id"),
+        sweep_meta=copy.deepcopy(e.get("sweep_meta")),
     )
 
 

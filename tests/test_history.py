@@ -155,3 +155,83 @@ def test_load_history_accepts_single_entry(tmp_path):
     loaded = load_history(path)
     assert len(loaded) == 1
     assert loaded[0].name == "single"
+
+# ---------------------------------------------------------------------
+#  Sweep tagging
+# ---------------------------------------------------------------------
+
+def test_new_entry_accepts_sweep_fields(tmp_path):
+    files = _minimal_files(tmp_path)
+    e = new_entry(
+        "sweep point",
+        inp_path=files["inp"], d_path=files["d"], cost_path=files["cost"],
+        diam_unit="mm",
+        algorithms=["GA"], n_runs=1, seed=42, ns=10, max_gen=5,
+        constraints=_constraints(), algorithm_params=_algo_params(),
+        sweep_group_id="group-123",
+        sweep_meta={"param": "GA.ga_pc", "value": 0.8},
+    )
+    assert e.sweep_group_id == "group-123"
+    assert e.sweep_meta == {"param": "GA.ga_pc", "value": 0.8}
+
+
+def test_sweep_fields_deep_copy(tmp_path):
+    files = _minimal_files(tmp_path)
+    meta = {"param": "GA.ga_pc", "value": 0.8}
+    e = new_entry(
+        "x", inp_path=files["inp"], d_path=files["d"],
+        cost_path=files["cost"], diam_unit="mm",
+        algorithms=["GA"], n_runs=1, seed=1, ns=10, max_gen=5,
+        constraints=_constraints(), algorithm_params=_algo_params(),
+        sweep_group_id="g", sweep_meta=meta,
+    )
+    meta["value"] = 999
+    assert e.sweep_meta["value"] == 0.8
+
+
+def test_sweep_fields_roundtrip(tmp_path):
+    files = _minimal_files(tmp_path)
+    e = new_entry(
+        "pt", inp_path=files["inp"], d_path=files["d"],
+        cost_path=files["cost"], diam_unit="mm",
+        algorithms=["GA"], n_runs=1, seed=1, ns=10, max_gen=5,
+        constraints=_constraints(), algorithm_params=_algo_params(),
+        sweep_group_id="group-abc",
+        sweep_meta={"param": "Pmin", "value": 25.0},
+    )
+    path = tmp_path / "e.json"
+    save_entry(e, path)
+    loaded = load_entry(path)
+    assert loaded.sweep_group_id == "group-abc"
+    assert loaded.sweep_meta == {"param": "Pmin", "value": 25.0}
+
+
+def test_old_entry_without_sweep_fields_loads():
+    """Backward compat: entries written before v0.6.1 have no
+    sweep_group_id or sweep_meta.  They must load cleanly."""
+    from wds_optimizer.history import from_dict
+
+    old_data = {
+        "version": "0.4.1a",
+        "entry": {
+            "entry_id": "e1",
+            "name": "old entry",
+            "created_at": "2026-01-01T00:00:00",
+            "inp_path": "/x.inp", "d_path": "/x.txt",
+            "cost_path": "/y.txt",
+            "diam_unit": "mm",
+            "algorithms": ["GA"],
+            "n_runs": 1, "seed": 1, "ns": 10, "max_gen": 5,
+            "constraints": _constraints(),
+            "algorithm_params": _algo_params(),
+            "constraint_policy": "deb_prefers",
+            "fixed_pipes": "",
+            "status": "Complete",
+            "error": None,
+            "elapsed_seconds": None,
+            # No sweep_group_id, no sweep_meta
+        },
+    }
+    loaded = from_dict(old_data)
+    assert loaded.sweep_group_id is None
+    assert loaded.sweep_meta is None

@@ -950,6 +950,24 @@ def _render_plugins_panel() -> None:
         for path, reason in report.skipped:
             st.caption(f"`{Path(path).name}` — {reason}")
 
+def _algorithm_params_from_sidebar(algorithms: list[str]) -> dict:
+    """Read each algorithm's param values from widget keys.
+
+    Returns ``{short_id: {param_key: value}}``.
+    """
+    from wds_optimizer.algorithms.registry import ALGORITHM_REGISTRY
+    out: dict = {}
+    for sid in algorithms:
+        entry = ALGORITHM_REGISTRY.get(sid)
+        if entry is None:
+            continue
+        params = {}
+        for p in entry["meta"]["params"]:
+            wk = p["key"] + "_input"
+            params[p["key"]] = st.session_state.get(wk, p["default"])
+        out[sid] = params
+    return out
+
 def _entry_from_sidebar(name: str) -> HistoryEntry:
     """Build a HistoryEntry (Draft, no result) from current sidebar.
 
@@ -993,16 +1011,7 @@ def _entry_from_sidebar(name: str) -> HistoryEntry:
     }
 
     algorithms = list(st.session_state.get("algo_input", []))
-    algo_params: dict[str, dict] = {}
-    for short_id in algorithms:
-        entry_meta = ALGORITHM_REGISTRY.get(short_id)
-        if entry_meta is None:
-            continue
-        params: dict = {}
-        for p in entry_meta["meta"]["params"]:
-            wk = p["key"] + "_input"
-            params[p["key"]] = st.session_state.get(wk, p["default"])
-        algo_params[short_id] = params
+    algo_params = _algorithm_params_from_sidebar(algorithms)
 
     return new_entry(
         name=name,
@@ -1081,6 +1090,115 @@ def _append_to_history(result, elapsed: float, cancelled: bool,
     history.append(entry)
     st.session_state.history = history
 
+def _create_sweep_history_entries(result, entry_context: dict) -> None:
+    """Add one HistoryEntry per completed sweep point.
+
+    All entries share a sweep_group_id so the History panel can group
+    them.  Each entry's config reflects the effective values used for
+    that point (constraints in SI, algorithm params after the swept
+    value was applied, per-point NS/MaxGen, per-point constraint
+    policy).
+    """
+    import copy as _copy
+    import uuid as _uuid
+    from wds_optimizer.sweep.config import normalize_param_name
+    from wds_optimizer.hydraulics.units import (
+        pressure_to_si, velocity_to_si,
+    )
+
+    group_id = _uuid.uuid4().hex
+    units = entry_context.get("units") or {}
+
+    # Base name: user's run_name_input if any, else auto.
+    user_name = str(st.session_state.get("run_name_input", "")).strip()
+    if user_name:
+        base_name = user_name
+    else:
+        base_name = auto_name(
+            algorithms=list(result.algorithms),
+            inp_path=entry_context.get("inp_path", ""),
+            ns=int(entry_context.get("ns", 0)
+                   or st.session_state.get("ns", 50)),
+            seed=int(result.experiment_seed),
+        )
+
+    norm_param = normalize_param_name(result.parameter)
+
+    for point in result.points:
+        if point.experiment is None:
+            continue
+
+        # Derive effective constraints and algorithm params for this
+        # point from the base config + the swept value.
+        entry_constraints = _copy.deepcopy(
+            entry_context.get("constraints") or {}
+        )
+        entry_algo_params = _copy.deepcopy(
+            entry_context.get("algorithm_params") or {}
+        )
+        entry_policy = str(
+            getattr(point.experiment, "constraint_policy",
+                    entry_context.get("constraint_policy", "deb_prefers"))
+        )
+
+        if norm_param in ("Pmin", "Pmax", "Vmin", "Vmax"):
+            try:
+                if norm_param in ("Pmin", "Pmax"):
+                    si = pressure_to_si(float(point.value), units)
+                else:
+                    si = velocity_to_si(float(point.value), units)
+                entry_constraints[norm_param] = {
+                    "enabled": True, "value": float(si),
+                }
+            except Exception:
+                pass
+        elif norm_param == "constraint_policy":
+            entry_policy = str(point.value)
+        elif norm_param == "NS":
+            # experiment.NS reflects the applied value
+            pass
+        elif norm_param == "MaxGen":
+            pass
+        elif norm_param == "n_runs":
+            pass
+        elif norm_param == "seed":
+            pass
+        elif "." in norm_param:
+            algo_id, pkey = norm_param.split(".", 1)
+            if algo_id in entry_algo_params:
+                entry_algo_params[algo_id][pkey] = point.value
+
+        entry_name = (
+            f"{base_name} \u00b7 {norm_param}="
+            f"{_format_sweep_value(point.value)}"
+        )
+        entry = new_entry(
+            entry_name,
+            inp_path=entry_context.get("inp_path", ""),
+            d_path=entry_context.get("d_path", ""),
+            cost_path=entry_context.get("cost_path", ""),
+            diam_unit=entry_context.get("diam_unit", "mm"),
+            algorithms=list(result.algorithms),
+            n_runs=int(result.n_runs),
+            seed=int(result.experiment_seed),
+            ns=int(getattr(point.experiment, "NS",
+                           st.session_state.get("ns", 50))),
+            max_gen=int(getattr(point.experiment, "MaxGen",
+                               st.session_state.get("max_gen", 500))),
+            constraints=entry_constraints,
+            algorithm_params=entry_algo_params,
+            constraint_policy=entry_policy,
+            fixed_pipes=entry_context.get("fixed_pipes", ""),
+        )
+        entry.experiment = point.experiment
+        entry.elapsed_seconds = float(point.mean_time or 0.0)
+        entry.status = (
+            "Cancelled" if getattr(point.experiment, "cancelled", False)
+            else "Complete"
+        )
+        entry.sweep_group_id = group_id
+        entry.sweep_meta = {"param": norm_param, "value": point.value}
+        st.session_state.history.append(entry)
 
 def _load_history_config(entry: HistoryEntry) -> None:
     """Load an entry's config into the sidebar.
@@ -1248,8 +1366,29 @@ def _render_history_section() -> None:
         st.session_state.history = []
         st.rerun()
 
-    for entry in reversed(history):
-        _render_one_history_row(entry)
+    # Group by sweep_group_id; standalone entries stay as-is.
+    sweep_groups: dict[str, list[HistoryEntry]] = {}
+    standalone: list[HistoryEntry] = []
+    for e in history:
+        if e.sweep_group_id:
+            sweep_groups.setdefault(e.sweep_group_id, []).append(e)
+        else:
+            standalone.append(e)
+
+    rows: list[tuple[str, str, object]] = []
+    for e in standalone:
+        rows.append((e.created_at, "single", e))
+    for gid, entries in sweep_groups.items():
+        ts = entries[0].created_at if entries else ""
+        rows.append((ts, "sweep", (gid, entries)))
+    rows.sort(key=lambda x: x[0], reverse=True)
+
+    for _, kind, data in rows:
+        if kind == "single":
+            _render_one_history_row(data)
+        else:
+            gid, entries = data
+            _render_sweep_history_row(gid, entries)
 
 
 def _render_one_history_row(entry: HistoryEntry) -> None:
@@ -1346,6 +1485,68 @@ def _render_one_history_row(entry: HistoryEntry) -> None:
                          key=f"hnd_{entry.entry_id}"):
                 st.session_state.history_delete_id = None
                 st.rerun()
+
+def _render_sweep_history_row(
+    group_id: str, entries: list["HistoryEntry"],
+) -> None:
+    """Render a collapsed row for a whole sweep group."""
+    param = "?"
+    if entries and entries[0].sweep_meta:
+        param = entries[0].sweep_meta.get("param", "?")
+
+    n_points = len(entries)
+    best_cost = float("inf")
+    best_value = None
+    n_feasible = 0
+    for e in entries:
+        if e.experiment is None:
+            continue
+        for runs in e.experiment.runs.values():
+            for r in runs:
+                if r.status in ("Success", "Partial") and r.feasible:
+                    n_feasible += 1
+                    if r.score < best_cost:
+                        best_cost = r.score
+                        best_value = (
+                            e.sweep_meta.get("value")
+                            if e.sweep_meta else None
+                        )
+
+    if np.isfinite(best_cost):
+        summary = (
+            f"\U0001F52C Sweep: {param} \u00b7 {n_points} points "
+            f"\u00b7 best ${best_cost:,.0f}"
+            + (f" at {_format_sweep_value(best_value)}"
+               if best_value is not None else "")
+        )
+    else:
+        summary = (
+            f"\U0001F52C Sweep: {param} \u00b7 {n_points} points "
+            f"\u00b7 no feasible result"
+        )
+
+    with st.expander(summary, expanded=False):
+        c_del, c_hint = st.columns([1, 3])
+        with c_del:
+            if st.button(
+                "\U0001F5D1 Delete sweep",
+                key=f"sweep_del_{group_id}",
+                width="stretch",
+            ):
+                st.session_state.history = [
+                    e for e in st.session_state.history
+                    if e.sweep_group_id != group_id
+                ]
+                st.rerun()
+        with c_hint:
+            st.caption(
+                "Open the Sweep tab to see the trend chart and the "
+                "statistical test.  Below, each point can be loaded "
+                "individually."
+            )
+
+        for e in entries:
+            _render_one_history_row(e)
 
 def _config_for_snapshot() -> dict:
     """Flat config dict for build_snapshot / build_report_zip.
@@ -1701,6 +1902,21 @@ def _start_sweep(param_name, values, algorithms, n_runs):
     seed = int(st.session_state.exp_seed)
     label = _sweep_param_label(param_name, units)
 
+    import copy as _copy
+    entry_context = {
+        "inp_path": st.session_state.get("inp_path", ""),
+        "d_path": st.session_state.get("d_path", ""),
+        "cost_path": st.session_state.get("cost_path", ""),
+        "diam_unit": str(st.session_state.get("diam_unit_input", "mm")),
+        "constraints": _copy.deepcopy(problem["Constraints"]),
+        "units": _copy.deepcopy(units),
+        "algorithm_params": _algorithm_params_from_sidebar(
+            list(algorithms)
+        ),
+        "constraint_policy": str(base_cfg.constraint_policy),
+        "fixed_pipes": str(st.session_state.get("fixed_pipes_input", "")),
+    }
+
     def target(progress_cb, cancel_cb):
         return run_parameter_sweep(
             problem, base_cfg,
@@ -1717,6 +1933,7 @@ def _start_sweep(param_name, values, algorithms, n_runs):
         "sweep", label=f"Sweep: {label}",
         context={"param_name": param_name, "values": list(values),
                  "algorithms": list(algorithms), "n_runs": int(n_runs),
+                 "entry_context": entry_context,
                  "summary": (f"Sweeping **{label}** over **{len(values)}** "
                              f"values: `{list(values)}` | Algorithms: "
                              f"**{', '.join(algorithms)}**, runs/point: "
@@ -1948,6 +2165,13 @@ def _finalize_sweep(job: BackgroundJob):
     n_pts, n_all = len(result.points), len(result.values)
     if n_pts:
         st.session_state.sweep_result = result
+        entry_ctx = job.context.get("entry_context")
+        if entry_ctx:
+            try:
+                _create_sweep_history_entries(result, entry_ctx)
+            except Exception as e:
+                print(f"[finalize_sweep] history append failed: {e}")
+        st.session_state._clear_run_name = True
     if result.cancelled:
         if n_pts:
             _notice("warning",
