@@ -59,7 +59,7 @@ from wds_optimizer.hydraulics.units import (
     diameter_to_display,
 )
 from wds_optimizer.app.network_map import build_network_figure
-from wds_optimizer.app.state import init_state, reset_experiment
+from wds_optimizer.app.state import init_state
 from wds_optimizer.app.uploads import read_uploaded
 from wds_optimizer.app.jobs import BackgroundJob
 from wds_optimizer.analysis import stats as st_
@@ -308,6 +308,37 @@ def _render_sidebar():
             cost_path = read_uploaded(
                 cost_upload.getvalue(), cost_upload.name
             )
+
+            # If these are different files than the ones currently
+            # loaded, clear any existing experiment so the results
+            # tabs don't show stale data from the old network.  The
+            # content-addressed upload returns the same path if the
+            # bytes are identical, so re-uploading the same files
+            # does not clear.
+            new_paths = (inp_path, d_path, cost_path)
+            old_paths = (
+                st.session_state.get("inp_path"),
+                st.session_state.get("d_path"),
+                st.session_state.get("cost_path"),
+            )
+            if (st.session_state.get("experiment") is not None
+                    and new_paths != old_paths):
+                st.session_state.experiment = None
+                st.session_state.problem_snapshot = None
+                st.session_state.best_algo = None
+                st.session_state.best_run_index = None
+                st.session_state.best_position_m = None
+                st.session_state.best_score = None
+                st.session_state.best_feasible = False
+                st.session_state.node_pressures = None
+                st.session_state.pipe_velocities = None
+                st.session_state.hydraulics_converged = False
+                _clear_run_ui_state()
+                st.info(
+                    "Loaded a new network — previous experiment "
+                    "results cleared."
+                )
+
             st.session_state.inp_path = inp_path
             st.session_state.d_path = d_path
             st.session_state.cost_path = cost_path
@@ -317,7 +348,7 @@ def _render_sidebar():
             st.info("Using previously loaded files.")
 
         st.divider()
-        st.header("2. Hydraulics & Constraints")
+        st.header("2. Constraints & Population")
 
         units = None
         if st.session_state.inp_path:
@@ -536,14 +567,17 @@ def _render_sidebar():
         )
         if not can_run:
             st.caption("Load all three input files to enable.")
-        if st.session_state.experiment is not None:
-            if st.button("🗑 Clear results", width="stretch", disabled=busy):
-                reset_experiment()
-                st.rerun()
+        # (The old "Clear results" button has been removed: History
+        # records every run, and loading new input files above clears
+        # stale results automatically.  No user action needed.)
 
-        # ---- 5. Save / Load ----
+        # ---- 5. Snapshot ----
         st.divider()
-        st.header("5. Save / Load")
+        st.header("5. Snapshot (single experiment)")
+        st.caption(
+            "Save or restore one experiment as a JSON.  For a whole "
+            "session's runs, use History (section 6)."
+        )
 
         if st.session_state.experiment is not None:
             try:
@@ -609,7 +643,7 @@ def _render_sidebar():
         
         # ---- 6. History ----
         st.divider()
-        st.header("6. History")
+        st.header("6. History (all runs)")
         _render_history_section()
         
         # ---- 7. Sweep ----
