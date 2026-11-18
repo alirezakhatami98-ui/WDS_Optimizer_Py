@@ -651,13 +651,37 @@ def _render_sidebar():
         st.header("7. Parameter Sweep")
 
         with st.expander("Configure sweep", expanded=False):
-            _units_for_sweep = st.session_state.get("network_units")
+            from wds_optimizer.sweep.config import build_sweep_parameters
+            _units_for_sweep = st.session_state.get("network_units") or {}
+            _catalog = build_sweep_parameters()
+
             sweep_param = st.selectbox(
                 "Parameter",
-                list(SWEEP_PARAMETERS.keys()),
-                format_func=lambda k: _sweep_param_label(k, _units_for_sweep),
+                list(_catalog.keys()),
+                format_func=lambda k: _catalog[k]["label"],
                 key="sweep_param_input",
             )
+
+            # Contextual hint for constraint values and choice params.
+            _info = _catalog[sweep_param]
+            _kind = _info.get("kind", "")
+            if _kind == "choice":
+                st.caption(
+                    f"Allowed values: "
+                    f"{', '.join(map(str, _info.get('choices', [])))}"
+                )
+            elif "unit" in _info:
+                if _info["unit"] == "pressure":
+                    u = _units_for_sweep.get("PressureUnit", "m")
+                elif _info["unit"] == "velocity":
+                    u = _units_for_sweep.get("VelocityUnit", "m/s")
+                else:
+                    u = ""
+                st.caption(
+                    f"Values are in {u} (the network's unit).  "
+                    f"Sweeping this constraint enables it automatically."
+                )
+
             sweep_vals_str = st.text_input(
                 "Values (comma-separated)", value="",
                 key="sweep_vals_input",
@@ -748,14 +772,15 @@ def _render_sidebar():
     }
 
 def _sweep_param_label(key: str, units: dict | None = None) -> str:
-    """Return a sweep-parameter label with the network's units."""
-    if key == "Pmin":
-        u = (units or {}).get("PressureUnit", "m")
-        return f"Min pressure ({u})"
-    if key == "Vmax":
-        u = (units or {}).get("VelocityUnit", "m/s")
-        return f"Max velocity ({u})"
-    return SWEEP_PARAMETERS.get(key, key)
+    """Return a human-readable label for a sweep parameter.
+
+    Delegates to build_sweep_parameters() for the current catalogue.
+    """
+    from wds_optimizer.sweep.config import build_sweep_parameters
+    catalog = build_sweep_parameters()
+    if key in catalog:
+        return catalog[key]["label"]
+    return key
 
 def _algo_display_label(sid: str) -> str:
     """Format an algorithm short_id for the GUI dropdown.
@@ -1636,14 +1661,26 @@ def _start_run(algo_label: str, run_name: str = ""):
 def _start_sweep(param_name, values, algorithms, n_runs):
     _sync_sidebar_state(with_n_runs=False)
 
-    # A GA_/PSO_/DE_ parameter only matters if that algorithm is selected.
-    for prefix, algo in (("GA_", "GA"), ("PSO_", "PSO"), ("DE_", "DE"),
-                         ("SADE_", "SADE")):
-        if param_name.startswith(prefix) and algo not in algorithms:
-            raise ValueError(
-                f"{param_name} only affects {algo}; add {algo} to the "
-                f"sweep's Algorithms or choose another parameter."
-            )
+    from wds_optimizer.sweep.config import (
+        build_sweep_parameters, normalize_param_name,
+    )
+    norm = normalize_param_name(param_name)
+    catalog = build_sweep_parameters()
+
+    if norm not in catalog:
+        raise ValueError(
+            f"Unknown sweep parameter {param_name!r}."
+        )
+
+    # If the parameter belongs to a specific algorithm, ensure that
+    # algorithm is in the sweep's algorithm list.
+    info = catalog[norm]
+    if info.get("algorithm") and info["algorithm"] not in algorithms:
+        raise ValueError(
+            f"{info['label']} only affects {info['algorithm']}; "
+            f"add {info['algorithm']} to the sweep's Algorithms."
+        )
+
     if not algorithms:
         raise ValueError("Select at least one algorithm for the sweep.")
 

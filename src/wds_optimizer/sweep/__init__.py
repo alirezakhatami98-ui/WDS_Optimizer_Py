@@ -1,9 +1,17 @@
-from .config import (
-    SWEEP_PARAMETERS, parse_sweep_values, apply_sweep_parameter,
+"""Sweep package."""
+from .config import (  # noqa: F401
+    SWEEP_PARAMETERS,
+    build_sweep_parameters,
+    normalize_param_name,
+    parse_sweep_values,
 )
-from .runner import SweepResult, SweepPoint, run_parameter_sweep
+from .runner import (  # noqa: F401
+    SweepPointResult,
+    SweepResult,
+    run_parameter_sweep,
+)
 
 __all__ = [
-    "SWEEP_PARAMETERS", "parse_sweep_values", "apply_sweep_parameter",
-    "SweepResult", "SweepPoint", "run_parameter_sweep",
+    "SWEEP_PARAMETERS", "build_sweep_parameters", "normalize_param_name", "parse_sweep_values", "apply_sweep_parameter",
+    "SweepPointResult", "SweepResult", "SweepPoint", "run_parameter_sweep",
 ]
