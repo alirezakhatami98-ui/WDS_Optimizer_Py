@@ -1,5 +1,6 @@
 """Multi-run experiment orchestration (mirror of runExperiment.m)."""
 
+import copy
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Callable, Optional
@@ -168,7 +169,14 @@ def run_experiment(
             if getattr(base_config, "Restart", None) is not None:
                 cfg.Restart = replace(base_config.Restart)
             cfg.Seed = int(run_seeds[r])
-            cfg.constraint_policy = base_config.constraint_policy  # ← NEW
+            cfg.constraint_policy = base_config.constraint_policy
+            # Cache and extra are non-family fields that must be
+            # propagated from base_config.  Cache enables fast re-use
+            # across runs (sweep, multi-algorithm experiments);
+            # extra carries plugin params (added in v0.3.0, but the
+            # propagation was missed until now).
+            cfg.Cache = base_config.Cache
+            cfg.extra = copy.deepcopy(base_config.extra)
             # Wrap the per-gen callback to add run-level context
             per_run_cb = None
             if progress_callback is not None:

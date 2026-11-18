@@ -112,35 +112,41 @@ def _apply_sweep_param(
     if "." in key:
         algo_id, param_key = key.split(".", 1)
         entry = catalog[key]
-        # If the algorithm param maps to a typed config family field,
-        # set it there.  Otherwise (plugin params), use cfg.extra.
         family = entry.get("algorithm")
-        if family is not None and hasattr(cfg, family):
-            # Find the corresponding param in META to know if maps_to
-            # points somewhere.
-            from ..algorithms.registry import ALGORITHM_REGISTRY
-            meta = ALGORITHM_REGISTRY[family]["meta"]
-            maps_to = None
-            for p in meta["params"]:
-                if p["key"] == param_key:
-                    maps_to = p.get("maps_to")
-                    break
-            if maps_to is not None:
-                fam_field, field_name = maps_to
-                fam_cfg = getattr(cfg, fam_field, None)
-                if fam_cfg is None or not hasattr(fam_cfg, field_name):
-                    raise ValueError(
-                        f"cannot set {fam_field}.{field_name} for "
-                        f"sweep {key}: config field missing"
-                    )
-                setattr(fam_cfg, field_name, value)
-            else:
-                cfg.extra.setdefault(family, {})[param_key] = value
+        if family is None:
+            raise ValueError(
+                f"cannot apply sweep value for {key!r}: no algorithm "
+                f"associated with this parameter"
+            )
+
+        # Plugin algorithms are NOT fields on AlgorithmConfig; their
+        # params live in cfg.extra[family].  Built-in algorithms have
+        # a matching family dataclass on the config.
+        if not hasattr(cfg, family):
+            cfg.extra.setdefault(family, {})[param_key] = value
             return
-        raise ValueError(
-            f"cannot apply sweep value for {key}: algorithm family "
-            f"{family!r} not on config"
-        )
+
+        # Built-in algorithm: use META's maps_to to decide whether the
+        # value goes on a typed family field or into cfg.extra.
+        from ..algorithms.registry import ALGORITHM_REGISTRY
+        meta = ALGORITHM_REGISTRY[family]["meta"]
+        maps_to = None
+        for p in meta["params"]:
+            if p["key"] == param_key:
+                maps_to = p.get("maps_to")
+                break
+        if maps_to is not None:
+            fam_field, field_name = maps_to
+            fam_cfg = getattr(cfg, fam_field, None)
+            if fam_cfg is None or not hasattr(fam_cfg, field_name):
+                raise ValueError(
+                    f"cannot set {fam_field}.{field_name} for "
+                    f"sweep {key}: config field missing"
+                )
+            setattr(fam_cfg, field_name, value)
+        else:
+            cfg.extra.setdefault(family, {})[param_key] = value
+        return
 
     raise ValueError(f"cannot apply sweep value for {key!r}")
 

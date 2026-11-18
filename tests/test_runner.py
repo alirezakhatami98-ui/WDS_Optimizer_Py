@@ -311,3 +311,65 @@ def test_unexpected_error_marks_run_failed():
     assert result.runs["GA"][0].status == "Failed"
     assert "boom" in result.runs["GA"][0].error_message
     assert result.runs["GA"][1].status == "Failed"   # both fail, no break
+
+def test_cache_is_propagated_to_per_run_config():
+    """A cache attached to base_config must reach the algorithm's config.
+
+    Regression for a bug where run_experiment constructed a fresh
+    AlgorithmConfig (Cache=None) for each run, silently dropping the
+    caller's cache.  This made sweep iterations recompute every
+    design and made shared-cache experiments impossible.
+    """
+    problem = _problem()
+    cfg = build_algorithm_config(NS=10, MaxGen=2)
+    sentinel = {"marker": "this is the caller's cache"}
+    cfg.Cache = sentinel
+
+    captured = {}
+    def fake(problem, run_cfg, **kw):
+        captured["cache"] = run_cfg.Cache
+        if kw.get("meta") is not None:
+            kw["meta"].update({
+                "nfe": 0, "n_sim": 0, "nfe_to_best": 0,
+                "restart_gens": [], "epoch_bests": [100.0], "extra": {},
+            })
+        return 100.0, np.zeros(problem["NP"]), np.array([100.0]), True
+
+    patched = {k: {"run": fake, "meta": v["meta"]}
+               for k, v in ALGORITHM_REGISTRY.items()}
+    with patch.dict(ALGORITHM_REGISTRY, patched, clear=False):
+        run_experiment(
+            problem, cfg,
+            number_of_runs=1, algorithms=["GA"], experiment_seed=1,
+        )
+
+    assert captured["cache"] is sentinel
+
+
+def test_extra_is_propagated_to_per_run_config():
+    """cfg.extra from base_config must reach the algorithm's config."""
+    problem = _problem()
+    cfg = build_algorithm_config(NS=10, MaxGen=2)
+    cfg.extra = {"MyPlugin": {"my_lr": 0.42}}
+
+    captured = {}
+    def fake(problem, run_cfg, **kw):
+        captured["extra"] = run_cfg.extra
+        if kw.get("meta") is not None:
+            kw["meta"].update({
+                "nfe": 0, "n_sim": 0, "nfe_to_best": 0,
+                "restart_gens": [], "epoch_bests": [100.0], "extra": {},
+            })
+        return 100.0, np.zeros(problem["NP"]), np.array([100.0]), True
+
+    patched = {k: {"run": fake, "meta": v["meta"]}
+               for k, v in ALGORITHM_REGISTRY.items()}
+    with patch.dict(ALGORITHM_REGISTRY, patched, clear=False):
+        run_experiment(
+            problem, cfg,
+            number_of_runs=1, algorithms=["GA"], experiment_seed=1,
+        )
+
+    assert captured["extra"] == {"MyPlugin": {"my_lr": 0.42}}
+    # Mutation of the per-run copy must not affect the original.
+    assert cfg.extra == {"MyPlugin": {"my_lr": 0.42}}
