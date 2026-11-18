@@ -3012,10 +3012,11 @@ def _render_sweep_stats(result):
             f"Only {result.n_runs} runs per point: tests cannot reach "
             "significance with so few runs. Use ≥ 5 (ideally 20–30)."
         )
-    labels = [f"{p.value:g}" for p in pts]
+    labels = [_format_sweep_value(p.value) for p in pts]
     for algo in result.algorithms:
         groups = {
-            f"{p.value:g}": st_.feasible_costs(p.experiment.runs.get(algo, []))
+            _format_sweep_value(p.value):
+                st_.feasible_costs(p.experiment.runs.get(algo, []))
             for p in pts
         }
         ref_label = st.selectbox(

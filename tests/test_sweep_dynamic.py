@@ -387,3 +387,28 @@ def test_runner_sweep_constraint_policy_strings():
         )
     # The base problem's Constraints must not be affected.
     assert problem["Constraints"]["Pmin"]["value"] == 30.0
+
+def test_no_direct_g_format_on_sweep_value_in_source():
+    """Guard: no f"{{...value:g}}" left in streamlit_app.py.
+
+    Regression: three separate places used :g on sweep values, and
+    each broke when the swept parameter was a string (constraint_policy,
+    strategy).  This source-level test catches the pattern before it
+    reaches the user.
+    """
+    from pathlib import Path
+    path = (Path(__file__).resolve().parent.parent
+            / "src" / "wds_optimizer" / "app" / "streamlit_app.py")
+    src = path.read_text(encoding="utf-8")
+
+    # Patterns that must NOT appear (they break on strings):
+    forbidden = [
+        "prog['ParameterValue']:g",
+        'prog["ParameterValue"]:g',
+        "p.value:g",
+    ]
+    for pat in forbidden:
+        assert pat not in src, (
+            f"Found forbidden format pattern {pat!r} in "
+            f"streamlit_app.py — use _format_sweep_value() instead"
+        )
