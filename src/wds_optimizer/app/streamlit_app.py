@@ -782,6 +782,18 @@ def _sweep_param_label(key: str, units: dict | None = None) -> str:
         return catalog[key]["label"]
     return key
 
+def _format_sweep_value(v) -> str:
+    """Format a sweep value for display.
+
+    Numbers use ``:g``; strings (choice params like constraint_policy)
+    are shown verbatim.
+    """
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, (int, float)):
+        return f"{v:g}"
+    return str(v)
+
 def _algo_display_label(sid: str) -> str:
     """Format an algorithm short_id for the GUI dropdown.
 
@@ -1803,7 +1815,7 @@ def _job_panel():
         if "ParameterValue" in prog:
             st.info(
                 f"Point **{pi}/{total}** | {ctx['param_name']} = "
-                f"**{prog['ParameterValue']:g}** | "
+                f"**{_format_sweep_value(prog['ParameterValue'])}** | "
                 f"elapsed {job.elapsed:.0f} s"
             )
         else:
@@ -2151,13 +2163,17 @@ def _render_sweep_tab():
         f"runs/point: {result.n_runs} | seed: {result.experiment_seed}"
     )
 
-    # Dynamic value column header: include units when relevant
-    if result.parameter == "Pmin":
-        value_header = f"Pmin ({units.get('PressureUnit', 'm')})"
-    elif result.parameter == "Vmax":
-        value_header = f"Vmax ({units.get('VelocityUnit', 'm/s')})"
+    # Dynamic value column header: include units when relevant.
+    # Handles both old-style parameter names (Pmin/Vmax) and v0.6
+    # namespaced names (Pmin, Pmax, Vmin, Vmax, NS, MaxGen, seed,
+    # constraint_policy, GA.ga_pc, plugin params).
+    _param_short = result.parameter.split(".")[-1]
+    if _param_short in ("Pmin", "Pmax"):
+        value_header = f"{_param_short} ({units.get('PressureUnit', 'm')})"
+    elif _param_short in ("Vmin", "Vmax"):
+        value_header = f"{_param_short} ({units.get('VelocityUnit', 'm/s')})"
     else:
-        value_header = "Value"
+        value_header = _param_short
 
     if getattr(result, "cancelled", False):
         st.warning(
@@ -2169,7 +2185,7 @@ def _render_sweep_tab():
     rows = []
     for p in result.points:
         rows.append({
-            value_header:     f"{p.value:g}",
+            value_header:     _format_sweep_value(p.value),
             "Status":         p.status,
             "Best (feasible)": (
                 f"{p.best_score:,.0f}" if np.isfinite(p.best_score) else "—"
@@ -2187,7 +2203,21 @@ def _render_sweep_tab():
     # Trend chart (complete points only; partial ones are in the table)
     plot_pts = [p for p in result.points
                 if p.status in ("Success", "AllInfeasible")]
-    xs = [p.value for p in plot_pts]
+    if not plot_pts:
+        st.info("No completed sweep points to plot.")
+        _render_sweep_stats(result)
+        return
+
+    # Determine whether the swept parameter is numeric.  Numeric
+    # sweeps (Pc, NS, Pmin, ...) get a line chart with a continuous
+    # x-axis; categorical sweeps (constraint_policy, strategy, ...)
+    # get a bar chart — a line across categories would be misleading.
+    _is_numeric = all(
+        isinstance(p.value, (int, float)) and not isinstance(p.value, bool)
+        for p in plot_pts
+    )
+
+    xs = [_format_sweep_value(p.value) for p in plot_pts]
     ys = [
         p.mean_score if np.isfinite(p.mean_score) else np.nan
         for p in plot_pts
@@ -2196,15 +2226,33 @@ def _render_sweep_tab():
         p.best_score if np.isfinite(p.best_score) else np.nan
         for p in plot_pts
     ]
+
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=xs, y=ys, mode="lines+markers",
-        name="Mean cost", line=dict(color="#1971c2", width=2),
-    ))
-    fig.add_trace(go.Scatter(
-        x=xs, y=bests, mode="lines+markers",
-        name="Best cost", line=dict(color="#d9480f", width=2, dash="dash"),
-    ))
+    if _is_numeric:
+        fig.add_trace(go.Scatter(
+            x=[p.value for p in plot_pts], y=ys,
+            mode="lines+markers",
+            name="Mean cost", line=dict(color="#1971c2", width=2),
+        ))
+        fig.add_trace(go.Scatter(
+            x=[p.value for p in plot_pts], y=bests,
+            mode="lines+markers",
+            name="Best cost",
+            line=dict(color="#d9480f", width=2, dash="dash"),
+        ))
+    else:
+        fig.add_trace(go.Bar(
+            x=xs, y=ys, name="Mean cost",
+            marker_color="#1971c2",
+            text=[f"{v:,.0f}" if np.isfinite(v) else "—" for v in ys],
+            textposition="outside",
+        ))
+        fig.add_trace(go.Scatter(
+            x=xs, y=bests, mode="markers",
+            name="Best cost",
+            marker=dict(color="#d9480f", size=10, symbol="diamond"),
+        ))
+
     fig.update_layout(
         height=380,
         xaxis_title=_sweep_param_label(result.parameter, units),

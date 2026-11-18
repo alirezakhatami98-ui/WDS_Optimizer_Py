@@ -112,6 +112,27 @@ def test_parse_sweep_values_empty_raises():
     with pytest.raises(ValueError, match="empty"):
         parse_sweep_values("")
 
+def test_parse_sweep_values_strips_single_quotes():
+    """Users may type quoted values; parse them without quotes."""
+    vals = parse_sweep_values("'deb_prefers', 'fixed_penalty_prefers'")
+    assert vals == ["deb_prefers", "fixed_penalty_prefers"]
+
+
+def test_parse_sweep_values_strips_double_quotes():
+    vals = parse_sweep_values('"deb_prefers", "fixed_penalty_prefers"')
+    assert vals == ["deb_prefers", "fixed_penalty_prefers"]
+
+
+def test_parse_sweep_values_strips_only_matching_quotes():
+    """A leading quote without a matching trailing one is kept."""
+    vals = parse_sweep_values("'deb_prefers")
+    # No pair, so the single leading quote stays.
+    assert vals == ["'deb_prefers"]
+
+
+def test_parse_sweep_values_mixed_quoted_and_unquoted():
+    vals = parse_sweep_values("'a', b, \"c\"")
+    assert vals == ["a", "b", "c"]
 
 # ---------------------------------------------------------------------
 #  Applying sweep params
@@ -337,3 +358,32 @@ def test_runner_sweep_seed():
     assert len(result.points) == 2
     assert result.points[0].experiment.experiment_seed == 1
     assert result.points[1].experiment.experiment_seed == 2
+
+def test_runner_sweep_constraint_policy_strings():
+    """Sweep constraint_policy with string values; end-to-end.
+
+    Regression for two bugs:
+      1. Users typing quoted values ("'deb_prefers'") failed with
+         "Unknown constraint policy".
+      2. Sweep results rendering crashed on f"{value:g}" for strings.
+
+    This test only covers (1); (2) is covered by the GUI display code.
+    """
+    problem = _synthetic_problem()
+    cfg = build_algorithm_config(NS=10, MaxGen=5)
+    cfg.Seed = 42
+    cfg.Cache = _synthetic_cache()
+
+    result = run_parameter_sweep(
+        problem, cfg,
+        parameter_name="constraint_policy",
+        values=["deb_prefers", "fixed_penalty_prefers"],
+        algorithms=["GA"], n_runs=1, experiment_seed=42,
+    )
+    assert len(result.points) == 2
+    for p in result.points:
+        assert p.status in ("Success", "AllInfeasible"), (
+            f"point {p.value!r}: status={p.status}, error={p.error!r}"
+        )
+    # The base problem's Constraints must not be affected.
+    assert problem["Constraints"]["Pmin"]["value"] == 30.0

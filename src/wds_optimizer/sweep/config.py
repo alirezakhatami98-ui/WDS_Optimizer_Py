@@ -169,8 +169,11 @@ SWEEP_PARAMETERS = build_sweep_parameters()
 def parse_sweep_values(raw: str) -> list:
     """Parse a comma-separated values string.
 
-    Strings are kept as strings (for choice params); numbers are
-    parsed.  Blank entries are dropped.  Order is preserved.
+    Numbers become int/float; other tokens become strings (for choice
+    params).  A single layer of surrounding single or double quotes is
+    stripped, so ``'deb_prefers'``, ``"deb_prefers"``, and
+    ``deb_prefers`` all produce the string ``deb_prefers``.  Blank
+    entries are dropped.  Order is preserved.
     """
     if not raw.strip():
         raise ValueError("values list is empty")
@@ -179,6 +182,9 @@ def parse_sweep_values(raw: str) -> list:
         raise ValueError("values list is empty")
     out: list = []
     for t in tokens:
+        # Strip one matching pair of quotes if present.
+        if len(t) >= 2 and t[0] == t[-1] and t[0] in ("'", '"'):
+            t = t[1:-1]
         try:
             # Integers first (so "1" stays 1, not 1.0)
             out.append(int(t))
