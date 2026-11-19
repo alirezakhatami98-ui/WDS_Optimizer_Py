@@ -290,12 +290,18 @@ def test_annotation_significant_gap(script):
 
 
 def test_annotation_not_significant_gap(script):
-    """A small gap relative to SEM → 'Not significant'."""
+    """A small gap relative to SEM → 'Not significant'.
+
+    The data must NOT be a flat line (>1% spread between means),
+    otherwise the flat-line branch fires first and suppresses the
+    significance test.  Spread here: 10k / 420k ≈ 2.4% → not flat.
+    """
     data = _make_sweep_json_dict(points=[
-        _make_point(0.7, 428_000.0, 20_000.0),   # SEM ~ 11.5k
-        _make_point(0.8, 429_000.0, 20_000.0),   # SEM ~ 11.5k
+        _make_point(0.7, 415_000.0, 20_000.0),   # SEM ≈ 11.5k
+        _make_point(0.8, 425_000.0, 20_000.0),   # SEM ≈ 11.5k
     ])
     notes, is_flat = script._annotations_for_sweep(data)
+    assert is_flat is False
     assert any("Not significant" in n for n in notes)
 
 
@@ -323,15 +329,39 @@ def test_annotation_failed_points(script):
     assert any("Failed points" in n for n in notes)
     assert any("boom" in n for n in notes)
 
+def test_annotation_mixed_sweep_reports_failures_and_comparison(script):
+    """A sweep with 2+ successful points AND some failed ones must
+    report both the failure(s) AND the significance result."""
+    data = _make_sweep_json_dict(points=[
+        _make_point(0.6, 500_000.0, 5_000.0),
+        _make_point(0.9, 420_000.0, 2_000.0),
+        _make_point(1.0, None, None, status="Failed",
+                    best=None, time_s=0.0, error="diverged"),
+    ])
+    data["points"][2]["mean_score"] = None
+    data["points"][2]["best_score"] = None
+    data["points"][2]["std_score"] = None
+    notes, is_flat = script._annotations_for_sweep(data)
+    assert is_flat is False
+    assert any("Failed points" in n for n in notes)
+    assert any("diverged" in n for n in notes)
+    assert any("Significant" in n for n in notes)
 
 def test_annotation_timing_anomaly(script):
-    """One value 1.5× slower than median → flag."""
+    """One value 1.5× slower than median → flag.
+
+    Uses non-flat means (spread 6k / 422.7k ≈ 1.4%) so the flat-line
+    branch does not fire.  The timing check runs regardless of
+    flat/not-flat, but the significance check would also run here —
+    that is fine, the test only asserts the timing note.
+    """
     data = _make_sweep_json_dict(points=[
-        _make_point(100, 422_000.0, 2_800.0, time_s=4.8),
+        _make_point(100, 420_000.0, 2_800.0, time_s=4.8),
         _make_point(300, 422_000.0, 2_800.0, time_s=2.3),
-        _make_point(500, 422_000.0, 2_800.0, time_s=2.4),
+        _make_point(500, 426_000.0, 2_800.0, time_s=2.4),
     ])
     notes, is_flat = script._annotations_for_sweep(data)
+    assert is_flat is False
     assert any("Timing anomaly" in n and "100" in n for n in notes)
 
 

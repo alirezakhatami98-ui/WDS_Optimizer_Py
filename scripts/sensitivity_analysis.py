@@ -405,35 +405,66 @@ def _annotations_for_sweep(
 ) -> tuple[list[str], bool]:
     """Generate interpretation notes for one sweep.
 
+    Order of notes (each independent — a sweep can have several):
+      1. Sample-size reminder (SEM) — always.
+      2. Failed points — always, if any.
+      3. If fewer than 2 scored: "no comparison possible" + return.
+      4. Flat-line detection — if yes, skip significance test
+         (the flat line IS the answer, "not significant" is
+         redundant).
+      5. Significance test (winner vs runner-up gap in SEM units) —
+         only if not flat.
+      6. High variance (CV > 3%) — always.
+      7. Timing anomaly (median > 1.5×) — always.
+
     Returns ``(notes, is_flat_line)``.
     """
     notes: list[str] = []
     n = data["n_runs"]
     points = data["points"]
+
+    # Partition.
     scored = [
         p for p in points
         if p.get("mean_score") is not None
         and p.get("status") == "Success"
     ]
+    failed = [
+        p for p in points
+        if p.get("status") not in ("Success", "AllInfeasible")
+    ]
 
+    # ---- 1. SEM reminder ----
+    if n > 0:
+        notes.append(
+            f"n_runs = {n} per point.  Standard error of the mean "
+            f"(SEM) ≈ std / √{n} ≈ 0.58 × std."
+        )
+
+    # ---- 2. Failed points ----
+    if failed:
+        vals = ", ".join(_format_value(p["value"]) for p in failed)
+        errors = sorted(
+            {p.get("error", "") for p in failed if p.get("error")}
+        )
+        note = f"**Failed points** ({len(failed)}): {vals}."
+        if errors:
+            note += f"  First error: {errors[0][:120]}"
+        notes.append(note)
+
+    # ---- 3. Early exit if not enough scored ----
     if len(scored) < 2:
         if scored:
             notes.append(
                 "_Only one successful point; no comparison possible._"
             )
-        else:
+        elif not failed:
             notes.append(
                 "_No successful points; the sweep did not complete._"
             )
         return notes, False
 
-    # ---- Sample size reminder ----
-    notes.append(
-        f"n_runs = {n} per point.  Standard error of the mean (SEM) ≈ "
-        f"std / √{n} ≈ {0.58:.2f} × std."
-    )
-
-    # ---- Flat line detection ----
+    # ---- 4. Flat-line detection ----
     is_flat = _detect_flat_line(scored, threshold_pct=1.0)
     if is_flat:
         means = [p["mean_score"] for p in scored]
@@ -447,12 +478,10 @@ def _annotations_for_sweep(
             f"resolution.  Consider wider values, more runs, or a "
             f"harder benchmark before drawing conclusions."
         )
-        return notes, True
-
-    # ---- Winner vs runner-up (significance test) ----
-    sorted_pts = sorted(scored, key=lambda p: p["mean_score"])
-    winner = sorted_pts[0]
-    if len(sorted_pts) >= 2:
+    else:
+        # ---- 5. Significance test (winner vs runner-up) ----
+        sorted_pts = sorted(scored, key=lambda p: p["mean_score"])
+        winner = sorted_pts[0]
         runner = sorted_pts[1]
         gap = runner["mean_score"] - winner["mean_score"]
         sem_w = _compute_sem(winner["std_score"], n)
@@ -473,7 +502,7 @@ def _annotations_for_sweep(
                     f"(${pooled:,.0f})."
                 )
 
-    # ---- High-variance values (CV > 3%) ----
+    # ---- 6. High variance (CV > 3%) ----
     high_var = [
         p for p in scored
         if p["std_score"] is not None
@@ -489,20 +518,7 @@ def _annotations_for_sweep(
         )
         notes.append(f"**High variance** (CV > 3%): {entries}.")
 
-    # ---- Failed points ----
-    failed = [
-        p for p in points
-        if p.get("status") not in ("Success", "AllInfeasible")
-    ]
-    if failed:
-        vals = ", ".join(_format_value(p["value"]) for p in failed)
-        errors = sorted({p.get("error", "") for p in failed if p.get("error")})
-        notes.append(
-            f"**Failed points** ({len(failed)}): {vals}."
-            + (f"  First error: {errors[0][:120]}" if errors else "")
-        )
-
-    # ---- Timing anomaly ----
+    # ---- 7. Timing anomaly (median > 1.5×) ----
     times = [
         (p["value"], p["mean_time_s"])
         for p in scored if p.get("mean_time_s", 0) > 0
@@ -524,7 +540,7 @@ def _annotations_for_sweep(
                     f"confirm."
                 )
 
-    return notes, False
+    return notes, is_flat
 
 def _param_section_md(param: str, data: dict) -> list[str]:
     """One parameter's table + annotations + conditional recommendation."""
