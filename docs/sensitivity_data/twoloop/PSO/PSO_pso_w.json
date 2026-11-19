@@ -1,0 +1,45 @@
+{
+  "benchmark": "twoloop",
+  "algorithm": "PSO",
+  "parameter": "PSO.pso_w",
+  "values": [
+    0.5,
+    0.7,
+    0.9
+  ],
+  "n_runs": 3,
+  "experiment_seed": 42,
+  "timestamp": "2026-11-19T18:38:21",
+  "points": [
+    {
+      "value": 0.5,
+      "status": "Success",
+      "best_score": 424000.0,
+      "mean_score": 424000.0,
+      "std_score": 0.0,
+      "feasible_pct": 100.0,
+      "mean_time_s": 2.9448658999754116,
+      "error": ""
+    },
+    {
+      "value": 0.7,
+      "status": "Success",
+      "best_score": 424000.0,
+      "mean_score": 438000.0,
+      "std_score": 14000.0,
+      "feasible_pct": 100.0,
+      "mean_time_s": 3.407838699989952,
+      "error": ""
+    },
+    {
+      "value": 0.9,
+      "status": "Success",
+      "best_score": 420000.0,
+      "mean_score": 453666.6666666667,
+      "std_score": 29871.948937646055,
+      "feasible_pct": 100.0,
+      "mean_time_s": 9.33190570003353,
+      "error": ""
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "benchmark": "twoloop",
+  "algorithm": "SADE",
+  "parameter": "SADE.sade_stag",
+  "values": [
+    100,
+    300,
+    500
+  ],
+  "n_runs": 3,
+  "experiment_seed": 42,
+  "timestamp": "2026-11-19T18:39:15",
+  "points": [
+    {
+      "value": 100,
+      "status": "Success",
+      "best_score": 419000.0,
+      "mean_score": 422333.3333333333,
+      "std_score": 2886.751345948129,
+      "feasible_pct": 100.0,
+      "mean_time_s": 4.759559100028127,
+      "error": ""
+    },
+    {
+      "value": 300,
+      "status": "Success",
+      "best_score": 419000.0,
+      "mean_score": 422333.3333333333,
+      "std_score": 2886.751345948129,
+      "feasible_pct": 100.0,
+      "mean_time_s": 2.347160500008613,
+      "error": ""
+    },
+    {
+      "value": 500,
+      "status": "Success",
+      "best_score": 419000.0,
+      "mean_score": 422333.3333333333,
+      "std_score": 2886.751345948129,
+      "feasible_pct": 100.0,
+      "mean_time_s": 2.43941019999329,
+      "error": ""
+    }
+  ]
+}

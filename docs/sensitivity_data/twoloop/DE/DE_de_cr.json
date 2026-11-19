@@ -1,0 +1,45 @@
+{
+  "benchmark": "twoloop",
+  "algorithm": "DE",
+  "parameter": "DE.de_cr",
+  "values": [
+    0.3,
+    0.5,
+    0.9
+  ],
+  "n_runs": 3,
+  "experiment_seed": 42,
+  "timestamp": "2026-11-19T18:39:05",
+  "points": [
+    {
+      "value": 0.3,
+      "status": "Success",
+      "best_score": 419000.0,
+      "mean_score": 420333.3333333333,
+      "std_score": 1527.5252316519466,
+      "feasible_pct": 100.0,
+      "mean_time_s": 3.077220299979672,
+      "error": ""
+    },
+    {
+      "value": 0.5,
+      "status": "Success",
+      "best_score": 419000.0,
+      "mean_score": 420666.6666666667,
+      "std_score": 2886.751345948129,
+      "feasible_pct": 100.0,
+      "mean_time_s": 6.229587299982086,
+      "error": ""
+    },
+    {
+      "value": 0.9,
+      "status": "Success",
+      "best_score": 419000.0,
+      "mean_score": 419333.3333333333,
+      "std_score": 577.3502691896258,
+      "feasible_pct": 100.0,
+      "mean_time_s": 4.952065099962056,
+      "error": ""
+    }
+  ]
+}

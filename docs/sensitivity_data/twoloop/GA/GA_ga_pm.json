@@ -1,0 +1,56 @@
+{
+  "benchmark": "twoloop",
+  "algorithm": "GA",
+  "parameter": "GA.ga_pm",
+  "values": [
+    0.01,
+    0.03,
+    0.05,
+    0.1
+  ],
+  "n_runs": 3,
+  "experiment_seed": 42,
+  "timestamp": "2026-11-19T18:38:01",
+  "points": [
+    {
+      "value": 0.01,
+      "status": "Success",
+      "best_score": 419000.0,
+      "mean_score": 447666.6666666667,
+      "std_score": 34530.18003621373,
+      "feasible_pct": 100.0,
+      "mean_time_s": 3.350462600006722,
+      "error": ""
+    },
+    {
+      "value": 0.03,
+      "status": "Success",
+      "best_score": 424000.0,
+      "mean_score": 436000.0,
+      "std_score": 11135.528725660044,
+      "feasible_pct": 100.0,
+      "mean_time_s": 2.0188464999664575,
+      "error": ""
+    },
+    {
+      "value": 0.05,
+      "status": "Success",
+      "best_score": 420000.0,
+      "mean_score": 440000.0,
+      "std_score": 17776.388834631176,
+      "feasible_pct": 100.0,
+      "mean_time_s": 7.896576500032097,
+      "error": ""
+    },
+    {
+      "value": 0.1,
+      "status": "Success",
+      "best_score": 420000.0,
+      "mean_score": 430000.0,
+      "std_score": 14000.0,
+      "feasible_pct": 100.0,
+      "mean_time_s": 9.068977400078438,
+      "error": ""
+    }
+  ]
+}

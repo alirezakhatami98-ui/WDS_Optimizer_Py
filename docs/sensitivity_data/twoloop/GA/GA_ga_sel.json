@@ -1,0 +1,34 @@
+{
+  "benchmark": "twoloop",
+  "algorithm": "GA",
+  "parameter": "GA.ga_sel",
+  "values": [
+    "tournament",
+    "roulette"
+  ],
+  "n_runs": 3,
+  "experiment_seed": 42,
+  "timestamp": "2026-11-19T18:38:06",
+  "points": [
+    {
+      "value": "tournament",
+      "status": "Success",
+      "best_score": 436000.0,
+      "mean_score": 447333.3333333333,
+      "std_score": 9814.954576223638,
+      "feasible_pct": 100.0,
+      "mean_time_s": 3.39988300006371,
+      "error": ""
+    },
+    {
+      "value": "roulette",
+      "status": "Success",
+      "best_score": 424000.0,
+      "mean_score": 436000.0,
+      "std_score": 11135.528725660044,
+      "feasible_pct": 100.0,
+      "mean_time_s": 1.214559099986218,
+      "error": ""
+    }
+  ]
+}
