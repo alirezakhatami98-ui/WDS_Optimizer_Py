@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Sensitivity analysis interpretation (v0.7.2)
+- `docs/sensitivity_notes.md` — human-authored interpretation of the
+  v0.7.1 quick-mode results: what is signal, what is noise, what is
+  uninformative, and what to do next.
+- `docs/parameters.md` — adds a "Twoloop (n=3)" column to each
+  parameter table with observed values, and a "Methodology and
+  caveats" section explaining the limits of 3-run quick-mode data.
+
+### Notes
+- No code changed in v0.7.2.  This is documentation only.
+- Default parameters were **not** changed.  The twoloop data does
+  not justify changing defaults (twoloop is small; hanoi-tuned
+  defaults remain the right choice).
+- Users can apply the twoloop-specific recommendations as
+  per-experiment overrides via the GUI/API.
+- `--full` (10 runs, hanoi + twoloop) is planned for a later
+  release.
+
+### Added
+
 #### Sensitivity analysis pipeline (v0.7.0)
 - `scripts/sensitivity_analysis.py` — runs predefined sweeps on the
   benchmarks and writes JSON + a generated Markdown report.

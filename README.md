@@ -185,6 +185,11 @@ python scripts/sensitivity_analysis.py --regenerate-only  # from existing JSON
 Parameter descriptions and design rationale are in
 [docs/parameters.md](docs/parameters.md).
 
+For an interpretation of the current results — including which
+parameters actually matter, which measurements are noisy, and what
+is safe to act on — see
+[docs/sensitivity_notes.md](docs/sensitivity_notes.md).
+
 ## Tests
 
 ```bash

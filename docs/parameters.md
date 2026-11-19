@@ -1,3 +1,25 @@
+## Methodology and caveats
+
+The "Twoloop (n=3)" columns above come from
+`scripts/sensitivity_analysis.py --quick` (see v0.7.1 in
+CHANGELOG).  They are **indicative**, not publication-grade:
+
+- **3 runs** is small; standard error is roughly `std / √3 ≈ 0.58 × std`.
+  Differences smaller than ~$12K are within noise on twoloop.
+- **Twoloop is a small benchmark** (8 pipes).  Most algorithms reach
+  or approach $419,000; discriminating between parameter values is
+  hard.
+- **Results do not necessarily transfer to hanoi** (34 pipes, 10×
+  more variable space).  Our defaults remain tuned for hanoi.
+- **Do not change the defaults** based on this data.  Use it to
+  guide *per-experiment overrides*, not to re-tune the tool.
+
+Publication-quality data will come from `--full` (10 runs, 500 gen,
+hanoi + twoloop) in a later release.  See
+[sensitivity_notes.md](sensitivity_notes.md) for the full
+interpretation, including which numbers are signal and which are
+noise.
+
 # Parameter Reference
 
 All tunable parameters in WDS Optimizer, with their meaning, default
@@ -38,11 +60,16 @@ Hanoi do not enforce Vmax.
 
 ## Algorithm parameters — GA
 
-| Parameter | Default | Range | Effect |
-|-----------|---------|-------|--------|
-| `ga_pc` | 0.8 | [0, 1] | Crossover probability.  Higher = more recombination; too high can lose good genes. |
-| `ga_pm` | 0.03 | [0, 1] | Per-gene mutation probability.  Higher = more exploration; too high = random walk. |
-| `ga_sel` | tournament | {tournament, roulette} | Selection scheme.  Tournament: robust to fitness scaling.  Roulette: proportional to fitness; sensitive to outliers. |
+| Parameter | Default | Range | Effect | Twoloop (n=3) |
+|-----------|---------|-------|--------|---------------|
+| `ga_pc` | 0.8 | [0, 1] | Crossover probability. | `0.7` mean $428.3K; `0.6` hit $419K once but mean $447K (high variance) |
+| `ga_pm` | 0.03 | [0, 1] | Per-gene mutation probability. | `0.1` mean $430.0K; `0.01` mean $447.7K, std $34.5K (very unstable) |
+| `ga_sel` | tournament | {tournament, roulette} | Selection scheme. | `roulette` mean $436.0K vs `tournament` $447.3K (borderline significant at n=3) |
+
+**Twoloop note:** `ga_pm = 0.01` should be avoided (huge variance).
+`ga_pm = 0.1` is more reliable than the default `0.03` on twoloop.
+`ga_pc` and `ga_sel` effects are less clear with n=3; keep defaults
+unless a specific use case is measured.
 
 **Note:** our GA is a *simple* GA, not the Improved GA of Dandy et
 al. (1996).  See [algorithms.md](algorithms.md).  Its benchmark gap
@@ -50,11 +77,16 @@ vs Simpson's Simple GA is documented there.
 
 ## Algorithm parameters — PSO
 
-| Parameter | Default | Range | Effect |
-|-----------|---------|-------|--------|
-| `pso_w` | 0.7 | [0, 2] | Inertia weight.  Higher = smoother trajectories; lower = more responsive. |
-| `pso_c1` | 1.5 | [0, 3] | Cognitive coefficient (pull toward personal best). |
-| `pso_c2` | 1.5 | [0, 3] | Social coefficient (pull toward global best). |
+| Parameter | Default | Range | Effect | Twoloop (n=3) |
+|-----------|---------|-------|--------|---------------|
+| `pso_w` | 0.7 | [0, 2] | Inertia weight. | `0.5` mean $424.0K, std $0 (extremely stable); `0.9` mean $453.7K, std $29.9K (unstable) |
+| `pso_c1` | 1.5 | [0, 3] | Cognitive coefficient. | `2.0` mean $422.3K (also hits optimum once) |
+| `pso_c2` | 1.5 | [0, 3] | Social coefficient. | not swept |
+
+**Twoloop note:** `pso_w = 0.5, pso_c1 = 2.0` match the classical
+PSO defaults from Kennedy & Eberhart (1995).  Our defaults (`0.7`,
+`1.5`) are tuned for hanoi-scale problems; on twoloop-scale
+networks, the classical defaults work better.
 
 **Note:** our PSO uses constant inertia weight.  Suribabu &
 Neelakantan (2006) use a decreasing inertia weight; see
@@ -62,11 +94,16 @@ Neelakantan (2006) use a decreasing inertia weight; see
 
 ## Algorithm parameters — DE
 
-| Parameter | Default | Range | Effect |
-|-----------|---------|-------|--------|
-| `de_f` | 0.5 | [0, 2] | Differential weight.  Scale applied to the difference vector. |
-| `de_cr` | 0.3 | [0, 1] | Crossover rate.  Fraction of genes taken from the mutant.  WDS problems are separable (cost = sum of per-pipe costs) so low CR often suits them better than the textbook 0.9. |
-| `de_strategy` | rand/1/bin | {rand/1/bin, best/1/bin, current-to-best/1/bin} | Mutation strategy.  rand/1/bin = broad exploration; best/1/bin = exploitative. |
+| Parameter | Default | Range | Effect | Twoloop (n=3) |
+|-----------|---------|-------|--------|---------------|
+| `de_f` | 0.5 | [0, 2] | Differential weight. | `0.3` mean $420.0K (vs default $420.3K — negligible) |
+| `de_cr` | 0.3 | [0, 1] | Crossover rate. WDS problems are separable so low CR often suits them. | `0.9` mean $419.3K, std $0.6K (vs default $420.3K, std $1.5K) |
+| `de_strategy` | rand/1/bin | 3 options | Mutation strategy. | not swept |
+
+**Twoloop note:** `de_cr = 0.9` is measurably better than the default
+`0.3` on twoloop.  This likely does **not** transfer to hanoi — the
+default `0.3` is tuned for larger networks where exploration matters
+more.  Override per experiment as needed.
 
 ## Algorithm parameters — SADE
 
@@ -79,7 +116,12 @@ Defaults reflect the paper.
 | `sade_crmin`, `sade_crmax` | 0.1, 0.9 | [0, 1] | Range for the self-adaptive crossover rate CR.  Paper: [0.1, 0.9]. |
 | `sade_conv` | True | {True, False} | Use the paper's Cv < Tol convergence criterion.  If False, always run full MaxGen. |
 | `sade_tol` | 1e-6 | 1e-9 to 1e-3 | Cv tolerance.  Paper: 1e-6. |
-| `sade_stag` | 300 | 0–10000 | Stagnation safeguard: stop after this many generations without improvement.  0 = off.  **Not in the paper** — added for practicality. |
+| `sade_stag` | 300 | 0–10000 | Stagnation safeguard. | **uninformative**: all values 100/300/500 produced identical results (MaxGen=200 was too short; safeguard never activated) |
+
+**Note:** the twoloop `sade_stag` sweep tells us nothing because
+MaxGen=200 < the sum of "early improvement + stagnation".  A
+meaningful measurement requires `--full` (MaxGen=500) or a harder
+benchmark (hanoi).
 
 ## Common overrides on standard benchmarks
 
