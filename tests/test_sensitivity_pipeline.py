@@ -162,7 +162,7 @@ def test_regenerate_with_no_data(script, tmp_path):
 #  Validation
 # ---------------------------------------------------------------------
 
-def test_unknown_param_errors(script, tmp_path):
+def test_unknown_param_errors(script, tmp_path, capsys):
     if not _hanoi_present():
         pytest.skip("benchmarks/hanoi not present")
     code = script.main([
@@ -176,6 +176,47 @@ def test_unknown_param_errors(script, tmp_path):
         "--markdown", str(tmp_path / "sens.md"),
     ])
     assert code != 0
+    err = capsys.readouterr().err
+    assert "Unknown sweep parameter" in err
+    # Nothing was written
+    assert not any(tmp_path.rglob("*.json"))
+
+
+def test_unknown_algo_errors(script, tmp_path, capsys):
+    if not _hanoi_present():
+        pytest.skip("benchmarks/hanoi not present")
+    code = script.main([
+        "--benchmark", "hanoi",
+        "--algo", "NOT_AN_ALGO",
+        "--param", "GA.ga_pc",
+        "--values", "0.6,0.9",
+        "--runs", "1",
+        "--max-gen", "5",
+        "--output-dir", str(tmp_path),
+        "--markdown", str(tmp_path / "sens.md"),
+    ])
+    assert code != 0
+    err = capsys.readouterr().err
+    assert "Unknown algorithm" in err
+
+
+def test_param_algo_mismatch_errors(script, tmp_path, capsys):
+    """GA.ga_pc with --algo PSO is a user mistake, not a silent no-op."""
+    if not _hanoi_present():
+        pytest.skip("benchmarks/hanoi not present")
+    code = script.main([
+        "--benchmark", "hanoi",
+        "--algo", "PSO",
+        "--param", "GA.ga_pc",
+        "--values", "0.6,0.9",
+        "--runs", "1",
+        "--max-gen", "5",
+        "--output-dir", str(tmp_path),
+        "--markdown", str(tmp_path / "sens.md"),
+    ])
+    assert code != 0
+    err = capsys.readouterr().err
+    assert "belongs to algorithm" in err
 
 
 def test_param_mode_without_benchmark_errors(script):

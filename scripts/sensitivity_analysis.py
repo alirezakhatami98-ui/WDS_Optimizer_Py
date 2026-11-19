@@ -211,6 +211,60 @@ def _build_plan(args) -> list[dict]:
         for (b, a, p, v) in template
     ]
 
+def _validate_sweep_plan(plan: list[dict]) -> None:
+    """Fail fast on unknown parameters or algorithms.
+
+    run_parameter_sweep is deliberately resilient per-point (a failed
+    point gets status="Failed" and the loop continues), which is right
+    for interactive GUI use.  But for the sensitivity script, a wrong
+    parameter name means the entire sweep is meaningless — no point in
+    writing a JSON full of failures.  Validate the plan up front and
+    raise with a clear message listing the valid options.
+
+    Raises ValueError if any sweep references an unknown parameter or
+    algorithm, or if the parameter belongs to an algorithm that is
+    not the sweep's target (a common authoring mistake, e.g.
+    sweeping "GA.ga_pc" with --algo PSO).
+    """
+    from wds_optimizer.algorithms.registry import list_algorithms
+    from wds_optimizer.sweep.config import (
+        build_sweep_parameters, normalize_param_name,
+    )
+    catalog = build_sweep_parameters()
+    valid_algos = set(list_algorithms())
+
+    for sweep in plan:
+        algo = sweep["algo"]
+        if algo not in valid_algos:
+            raise ValueError(
+                f"Unknown algorithm {algo!r}.  "
+                f"Available: {sorted(valid_algos)}"
+            )
+
+        raw_param = sweep["param"]
+        norm = normalize_param_name(raw_param)
+        if norm not in catalog:
+            available = sorted(catalog.keys())
+            # Show only the first few to keep the message readable;
+            # the user can list them all via --dry-run or by reading
+            # docs/parameters.md.
+            preview = available[:8] + (["..."] if len(available) > 8 else [])
+            raise ValueError(
+                f"Unknown sweep parameter {raw_param!r} "
+                f"(normalized: {norm!r}).  Available: {preview}"
+            )
+
+        # If the parameter belongs to a specific algorithm, it must
+        # match the sweep's --algo.  Otherwise the value is silently
+        # ignored (the runner sets the parameter on the config, but
+        # the algorithm being run does not consult it).
+        info = catalog[norm]
+        owning_algo = info.get("algorithm")
+        if owning_algo is not None and owning_algo != algo:
+            raise ValueError(
+                f"Parameter {raw_param!r} belongs to algorithm "
+                f"{owning_algo!r}, but --algo is {algo!r}."
+            )
 
 # ---------------------------------------------------------------------
 #  Saving sweep results
@@ -342,9 +396,17 @@ def _param_section_md(param: str, data: dict) -> list[str]:
                    if p["std_score"] is not None else "—")
         feas_str = f"{p['feasible_pct']:.0f}%"
         time_str = f"{p['mean_time_s']:.1f}"
+        # Show error indicator inline so a failed point is not
+        # silently indistinguishable from "infeasible".
+        if p.get("error"):
+            status_note = f" ⚠ {p['error'][:60]}"
+        elif p.get("status") not in (None, "Success"):
+            status_note = f" ({p['status']})"
+        else:
+            status_note = ""
         lines.append(
             f"| {v_str} | {best_str} | {mean_str} | "
-            f"{std_str} | {feas_str} | {time_str} |"
+            f"{std_str} | {feas_str} | {time_str}{status_note} |"
         )
         if p["mean_score"] is not None:
             if best_mean is None or p["mean_score"] < best_mean:
@@ -429,6 +491,7 @@ def _run(args) -> int:
         return 0
 
     plan = _build_plan(args)
+    _validate_sweep_plan(plan)   # fail fast on typos
 
     if args.dry_run:
         print(f"Dry-run: {len(plan)} sweep(s) would run:")
@@ -498,6 +561,8 @@ def _run(args) -> int:
                   f"best={best:>14s}  "
                   f"feas={p.feasible_pct:5.1f}%  "
                   f"({p.mean_time:.1f}s)")
+            if p.error:
+                print(f"      error: {p.error}")
 
         out_path = (
             output_dir / bench / algo
