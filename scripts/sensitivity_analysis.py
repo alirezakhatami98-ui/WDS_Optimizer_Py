@@ -373,9 +373,161 @@ def generate_markdown(output_dir: Path, md_path: Path) -> None:
     md_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.write_text("\n".join(lines), encoding="utf-8")
 
+def _compute_sem(std: float | None, n: int) -> float:
+    """Standard error of the mean = std / sqrt(n)."""
+    if std is None or n <= 0:
+        return float("nan")
+    import math
+    return std / math.sqrt(n)
+
+
+def _detect_flat_line(
+    scored: list[dict], threshold_pct: float = 1.0,
+) -> bool:
+    """True if the means span less than ``threshold_pct`` % of their average.
+
+    A flat line means the parameter had no measurable effect at the
+    resolution of this sweep — more samples or wider values are needed
+    before drawing conclusions.
+    """
+    if len(scored) < 2:
+        return False
+    means = [p["mean_score"] for p in scored]
+    avg = sum(means) / len(means)
+    if avg <= 0:
+        return False
+    spread = max(means) - min(means)
+    return (spread / avg) * 100.0 < threshold_pct
+
+
+def _annotations_for_sweep(
+    data: dict,
+) -> tuple[list[str], bool]:
+    """Generate interpretation notes for one sweep.
+
+    Returns ``(notes, is_flat_line)``.
+    """
+    notes: list[str] = []
+    n = data["n_runs"]
+    points = data["points"]
+    scored = [
+        p for p in points
+        if p.get("mean_score") is not None
+        and p.get("status") == "Success"
+    ]
+
+    if len(scored) < 2:
+        if scored:
+            notes.append(
+                "_Only one successful point; no comparison possible._"
+            )
+        else:
+            notes.append(
+                "_No successful points; the sweep did not complete._"
+            )
+        return notes, False
+
+    # ---- Sample size reminder ----
+    notes.append(
+        f"n_runs = {n} per point.  Standard error of the mean (SEM) ≈ "
+        f"std / √{n} ≈ {0.58:.2f} × std."
+    )
+
+    # ---- Flat line detection ----
+    is_flat = _detect_flat_line(scored, threshold_pct=1.0)
+    if is_flat:
+        means = [p["mean_score"] for p in scored]
+        avg = sum(means) / len(means)
+        spread = max(means) - min(means)
+        notes.append(
+            f"**Uninformative sweep**: all means lie within "
+            f"{spread / avg * 100:.2f}% of each other "
+            f"(${spread:,.0f} range, avg ${avg:,.0f}).  "
+            f"The parameter had no measurable effect at this "
+            f"resolution.  Consider wider values, more runs, or a "
+            f"harder benchmark before drawing conclusions."
+        )
+        return notes, True
+
+    # ---- Winner vs runner-up (significance test) ----
+    sorted_pts = sorted(scored, key=lambda p: p["mean_score"])
+    winner = sorted_pts[0]
+    if len(sorted_pts) >= 2:
+        runner = sorted_pts[1]
+        gap = runner["mean_score"] - winner["mean_score"]
+        sem_w = _compute_sem(winner["std_score"], n)
+        sem_r = _compute_sem(runner["std_score"], n)
+        if np.isfinite(sem_w) and np.isfinite(sem_r):
+            pooled = float(np.sqrt(sem_w ** 2 + sem_r ** 2))
+            if pooled > 0:
+                k = gap / pooled
+                if k < 1.0:
+                    verdict = "**Not significant**"
+                elif k < 2.0:
+                    verdict = "**Borderline**"
+                else:
+                    verdict = "**Significant**"
+                notes.append(
+                    f"{verdict} at n={n}: winner vs runner-up gap "
+                    f"${gap:,.0f} ≈ {k:.1f}×SEM "
+                    f"(${pooled:,.0f})."
+                )
+
+    # ---- High-variance values (CV > 3%) ----
+    high_var = [
+        p for p in scored
+        if p["std_score"] is not None
+        and p["mean_score"] and p["mean_score"] > 0
+        and (p["std_score"] / p["mean_score"]) > 0.03
+    ]
+    if high_var:
+        entries = ", ".join(
+            f"{_format_value(p['value'])} "
+            f"(CV {(p['std_score'] / p['mean_score']) * 100:.0f}%, "
+            f"std ${p['std_score']:,.0f})"
+            for p in high_var
+        )
+        notes.append(f"**High variance** (CV > 3%): {entries}.")
+
+    # ---- Failed points ----
+    failed = [
+        p for p in points
+        if p.get("status") not in ("Success", "AllInfeasible")
+    ]
+    if failed:
+        vals = ", ".join(_format_value(p["value"]) for p in failed)
+        errors = sorted({p.get("error", "") for p in failed if p.get("error")})
+        notes.append(
+            f"**Failed points** ({len(failed)}): {vals}."
+            + (f"  First error: {errors[0][:120]}" if errors else "")
+        )
+
+    # ---- Timing anomaly ----
+    times = [
+        (p["value"], p["mean_time_s"])
+        for p in scored if p.get("mean_time_s", 0) > 0
+    ]
+    if len(times) >= 3:
+        t_vals = [t for _, t in times]
+        median_t = float(np.median(t_vals))
+        if median_t > 0:
+            slow = [(v, t) for v, t in times if t > 1.5 * median_t]
+            if slow:
+                parts = ", ".join(
+                    f"{_format_value(v)} ({t:.1f}s)" for v, t in slow
+                )
+                notes.append(
+                    f"**Timing anomaly**: {parts}  "
+                    f"(median {median_t:.1f}s).  May indicate an "
+                    f"outlier run or a configuration that "
+                    f"terminated later than expected; re-run to "
+                    f"confirm."
+                )
+
+    return notes, False
 
 def _param_section_md(param: str, data: dict) -> list[str]:
-    """One parameter's table + recommendation."""
+    """One parameter's table + annotations + conditional recommendation."""
     lines = [
         f"\n#### `{param}`\n",
         f"_n_runs = {data['n_runs']}, "
@@ -384,20 +536,17 @@ def _param_section_md(param: str, data: dict) -> list[str]:
         "| Value | Best | Mean | Std | Feasible % | Time (s/pt) |",
         "|-------|------|------|-----|------------|-------------|",
     ]
-    best_mean: Optional[float] = None
-    best_value: Any = None
+
     for p in data["points"]:
         v_str = _format_value(p["value"])
         best_str = (f"${p['best_score']:,.0f}"
-                    if p["best_score"] is not None else "—")
+                    if p.get("best_score") is not None else "—")
         mean_str = (f"${p['mean_score']:,.0f}"
-                    if p["mean_score"] is not None else "—")
+                    if p.get("mean_score") is not None else "—")
         std_str = (f"${p['std_score']:,.0f}"
-                   if p["std_score"] is not None else "—")
-        feas_str = f"{p['feasible_pct']:.0f}%"
-        time_str = f"{p['mean_time_s']:.1f}"
-        # Show error indicator inline so a failed point is not
-        # silently indistinguishable from "infeasible".
+                   if p.get("std_score") is not None else "—")
+        feas_str = f"{p.get('feasible_pct', 0):.0f}%"
+        time_str = f"{p.get('mean_time_s', 0):.1f}"
         if p.get("error"):
             status_note = f" ⚠ {p['error'][:60]}"
         elif p.get("status") not in (None, "Success"):
@@ -408,16 +557,37 @@ def _param_section_md(param: str, data: dict) -> list[str]:
             f"| {v_str} | {best_str} | {mean_str} | "
             f"{std_str} | {feas_str} | {time_str}{status_note} |"
         )
-        if p["mean_score"] is not None:
-            if best_mean is None or p["mean_score"] < best_mean:
-                best_mean = p["mean_score"]
-                best_value = p["value"]
 
-    if best_mean is not None:
+    # ---- Annotations ----
+    notes, is_flat = _annotations_for_sweep(data)
+    if notes:
+        lines.append("")
+        for note in notes:
+            lines.append(f"- {note}")
+
+    # ---- Conditional recommendation ----
+    scored = [
+        p for p in data["points"]
+        if p.get("mean_score") is not None
+        and p.get("status") == "Success"
+    ]
+    if not scored:
         lines.append(
-            f"\n**Recommended:** `{param} = {_format_value(best_value)}` "
-            f"(lowest mean cost ${best_mean:,.0f})"
+            "\n**Recommended:** _none — no successful points._"
         )
+    elif is_flat:
+        lines.append(
+            "\n**Recommended:** _none — the sweep is uninformative "
+            "(flat line); see notes above._"
+        )
+    else:
+        best = min(scored, key=lambda p: p["mean_score"])
+        lines.append(
+            f"\n**Recommended:** `{param} = "
+            f"{_format_value(best['value'])}` "
+            f"(lowest mean cost ${best['mean_score']:,.0f})"
+        )
+
     return lines
 
 

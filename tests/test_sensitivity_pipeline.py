@@ -225,3 +225,136 @@ def test_param_mode_without_benchmark_errors(script):
         "--values", "0.6,0.9",
     ])
     assert code != 0
+
+# ---------------------------------------------------------------------
+#  Annotation logic
+# ---------------------------------------------------------------------
+
+def _make_sweep_json_dict(
+    *, n_runs=3,
+    points=None,
+    parameter="GA.ga_pc",
+):
+    """Helper to build a minimal sweep JSON dict for annotation tests."""
+    if points is None:
+        points = []
+    return {
+        "benchmark": "twoloop",
+        "algorithm": "GA",
+        "parameter": parameter,
+        "values": [p["value"] for p in points],
+        "n_runs": n_runs,
+        "experiment_seed": 42,
+        "timestamp": "2026-01-01T00:00:00",
+        "points": points,
+    }
+
+
+def _make_point(
+    value, mean, std, best=None, status="Success",
+    feasible_pct=100.0, time_s=1.0, error="",
+):
+    return {
+        "value": value,
+        "status": status,
+        "best_score": best if best is not None else mean,
+        "mean_score": mean,
+        "std_score": std,
+        "feasible_pct": feasible_pct,
+        "mean_time_s": time_s,
+        "error": error,
+    }
+
+
+def test_annotation_detects_flat_line(script):
+    """All means within 1% → flat line, no recommendation."""
+    data = _make_sweep_json_dict(points=[
+        _make_point(0.3, 422_000.0, 3_000.0),
+        _make_point(0.5, 422_500.0, 2_500.0),
+        _make_point(0.7, 422_200.0, 2_800.0),
+    ])
+    notes, is_flat = script._annotations_for_sweep(data)
+    assert is_flat is True
+    assert any("Uninformative sweep" in n for n in notes)
+
+
+def test_annotation_significant_gap(script):
+    """A large, low-variance gap → 'Significant' verdict."""
+    data = _make_sweep_json_dict(points=[
+        _make_point(0.3, 500_000.0, 5_000.0),
+        _make_point(0.9, 420_000.0, 2_000.0),
+    ])
+    notes, is_flat = script._annotations_for_sweep(data)
+    assert is_flat is False
+    assert any("Significant" in n for n in notes)
+
+
+def test_annotation_not_significant_gap(script):
+    """A small gap relative to SEM → 'Not significant'."""
+    data = _make_sweep_json_dict(points=[
+        _make_point(0.7, 428_000.0, 20_000.0),   # SEM ~ 11.5k
+        _make_point(0.8, 429_000.0, 20_000.0),   # SEM ~ 11.5k
+    ])
+    notes, is_flat = script._annotations_for_sweep(data)
+    assert any("Not significant" in n for n in notes)
+
+
+def test_annotation_high_variance_flag(script):
+    """CV > 3% flags the value."""
+    data = _make_sweep_json_dict(points=[
+        _make_point(0.6, 447_000.0, 24_500.0),   # CV ~ 5.5%
+        _make_point(0.7, 428_000.0, 8_000.0),    # CV ~ 1.9%
+    ])
+    notes, _ = script._annotations_for_sweep(data)
+    assert any("High variance" in n and "0.6" in n for n in notes)
+
+
+def test_annotation_failed_points(script):
+    data = _make_sweep_json_dict(points=[
+        _make_point(0.6, 420_000.0, 1_000.0),
+        _make_point(0.9, None, None, status="Failed",
+                    best=None, time_s=0.0, error="boom"),
+    ])
+    # Patch in "None" mean for failed
+    data["points"][1]["mean_score"] = None
+    data["points"][1]["best_score"] = None
+    data["points"][1]["std_score"] = None
+    notes, _ = script._annotations_for_sweep(data)
+    assert any("Failed points" in n for n in notes)
+    assert any("boom" in n for n in notes)
+
+
+def test_annotation_timing_anomaly(script):
+    """One value 1.5× slower than median → flag."""
+    data = _make_sweep_json_dict(points=[
+        _make_point(100, 422_000.0, 2_800.0, time_s=4.8),
+        _make_point(300, 422_000.0, 2_800.0, time_s=2.3),
+        _make_point(500, 422_000.0, 2_800.0, time_s=2.4),
+    ])
+    notes, is_flat = script._annotations_for_sweep(data)
+    assert any("Timing anomaly" in n and "100" in n for n in notes)
+
+
+def test_param_section_md_suppresses_recommendation_for_flat(script):
+    data = _make_sweep_json_dict(points=[
+        _make_point(100, 422_000.0, 2_800.0, time_s=2.0),
+        _make_point(300, 422_100.0, 2_900.0, time_s=2.1),
+    ])
+    lines = script._param_section_md("SADE.sade_stag", data)
+    text = "\n".join(lines)
+    assert "Uninformative sweep" in text
+    assert "_none — the sweep is uninformative" in text
+    # Must NOT recommend a specific value
+    assert "lowest mean cost" not in text
+
+
+def test_param_section_md_has_recommendation_when_clear_winner(script):
+    data = _make_sweep_json_dict(points=[
+        _make_point(0.3, 500_000.0, 5_000.0),
+        _make_point(0.9, 420_000.0, 2_000.0),
+    ])
+    lines = script._param_section_md("DE.de_cr", data)
+    text = "\n".join(lines)
+    assert "lowest mean cost" in text
+    assert "`DE.de_cr = 0.9`" in text
+    assert "Significant" in text
