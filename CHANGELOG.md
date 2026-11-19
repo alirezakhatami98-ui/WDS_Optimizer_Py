@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Sensitivity analysis pipeline (v0.7.0)
+- `scripts/sensitivity_analysis.py` — runs predefined sweeps on the
+  benchmarks and writes JSON + a generated Markdown report.
+  Modes: `--quick` (twoloop only, ~5 min), `--full` (hanoi +
+  twoloop, 10 runs, 500 gen, ~2-3 h), single-sweep
+  (`--benchmark/--algo/--param/--values`), and `--regenerate-only`.
+- `docs/parameters.md` — reference doc for every parameter: meaning,
+  default, range, effect.  Complements `docs/algorithms.md` (which
+  describes each algorithm).
+- `docs/sensitivity_analysis.md` — auto-generated report;
+  populated in v0.7.1 after running `--quick`.
+- `docs/sensitivity_data/**/*.json` — raw sweep records, one file
+  per (benchmark, algorithm, parameter).  Committed so future changes
+  can be diffed against this baseline.
+- `tests/test_sensitivity_pipeline.py` — 7 smoke tests
+  (dry-run, mini-sweep, markdown regeneration, error handling).
+
+### Notes
+- v0.7.0 ships the *pipeline*.  The results are populated in v0.7.1
+  after running `--quick`.  `--full` results will land in a later
+  release.
+- The script uses the existing Sweep backend (v0.6.0) unchanged.
+  No new dependency, no backend change.
+- Sensitivity analysis is an *authoring tool* for us.  Users run
+  interactive sweeps through the GUI's Sweep tab; the script is what
+  we use to write the parameter recommendations that ship with the
+  tool.
+
+### Added
+
 #### Plugin system — GUI integration (v0.5.1)
 - Plugins appear in the "Algorithms to run" dropdown with a `[P]`
   marker, alongside built-in algorithms.  No new concept, no
