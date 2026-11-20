@@ -43,6 +43,27 @@ def _fmt_cost(c) -> str:
         return "—"
     return f"${c:,.0f}"
 
+def _reason_to_display(reason: str) -> str:
+    """Translate internal reason IDs to human-facing text.
+
+    The ``BatchParamResult.reason`` field stores internal IDs
+    ("lowest_mean", "flat_line (...)") for JSON compatibility with
+    v0.7.x.  The markdown report translates them:
+
+      "lowest_mean"          -> "lowest mean cost"
+      "lowest_mean (high ..."-> "lowest mean cost (high ...)"
+      "flat_line"            -> "flat line"
+      "no_successful_points" -> "no successful points"
+    """
+    if not reason:
+        return reason
+    if reason.startswith("lowest_mean"):
+        return reason.replace("lowest_mean", "lowest mean cost", 1)
+    if reason.startswith("flat_line"):
+        return reason.replace("flat_line", "flat line", 1)
+    if reason == "no_successful_points":
+        return "no successful points"
+    return reason
 
 # ---------------------------------------------------------------------
 #  Markdown report
@@ -117,10 +138,11 @@ def _param_section(pr: BatchParamResult, n_runs: int = 1) -> list[str]:
         lines.append(
             f"**Recommended:** `{pr.param} = "
             f"{_fmt_value(pr.recommended_value)}` "
-            f"(mean {_fmt_cost(pr.recommended_mean)}; {pr.reason})"
+            f"(mean {_fmt_cost(pr.recommended_mean)}; "
+            f"{_reason_to_display(pr.reason)})"
         )
     elif pr.reason:
-        lines.append(f"**Note:** {pr.reason}")
+        lines.append(f"**Note:** {_reason_to_display(pr.reason)}")
 
     return lines
 

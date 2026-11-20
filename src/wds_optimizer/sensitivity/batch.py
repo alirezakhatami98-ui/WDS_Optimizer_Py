@@ -253,7 +253,7 @@ def _annotations_for_param(
     # ---- 1. Failures ----
     if failures:
         first = failures[0]
-        msg = f"{len(failures)} point(s) failed"
+        msg = f"Failed points ({len(failures)} of {len(pr.points)})"
         if first.error:
             msg += f": {first.error[:100]}"
         notes.append(msg)
@@ -268,7 +268,7 @@ def _annotations_for_param(
     if hi > 0 and (hi - lo) / lo < _FLAT_LINE_TOLERANCE:
         is_flat = True
         notes.append(
-            f"Flat line: means ${lo:,.0f}–${hi:,.0f} "
+            f"Uninformative sweep: means ${lo:,.0f}–${hi:,.0f} "
             f"(<{_FLAT_LINE_TOLERANCE * 100:.0f}% spread; parameter "
             f"has no measurable effect)"
         )
