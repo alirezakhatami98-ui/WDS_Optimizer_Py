@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+#### Rename `sweep` → `sensitivity` (v0.8.0)
+- Python package: `wds_optimizer.sweep` → `wds_optimizer.sensitivity`.
+  The old package name still works but emits a `DeprecationWarning`
+  and will be removed in v0.9.0.
+- Public API (renamed):
+  - `SWEEP_PARAMETERS` → `SENSITIVITY_PARAMETERS`
+  - `build_sweep_parameters()` → `build_sensitivity_parameters()`
+  - `parse_sweep_values()` → `parse_sensitivity_values()`
+  - `run_parameter_sweep()` → `run_single_sweep()`
+  - `SweepResult` → `SingleSweepResult`
+  - `SweepPointResult` → `SingleSweepPoint`
+  - `_apply_sweep_param()` → `_apply_sensitivity_param()`
+  - Old names remain as aliases (`SWEEP_PARAMETERS = SENSITIVITY_PARAMETERS`,
+    etc.) in the shim.
+- Test file: `tests/test_sweep_dynamic.py` → `tests/test_sensitivity_dynamic.py`.
+- Rationale: the user-facing feature is "sensitivity analysis".  Using
+  "sweep" in code but "sensitivity" in UI creates two vocabularies for
+  the same concept.  The rename aligns them.
+
+### Deprecated
+- `wds_optimizer.sweep` (whole package): will be removed in v0.9.0.
+- All `SWEEP_*` and `*_sweep*` names inside the package.
+
+### Notes
+- **No user-visible behaviour change in v0.8.0.**  The GUI still shows
+  "Parameter Sweep" in the sidebar and the Sweep tab.  v0.8.2 will
+  replace both with the new Sensitivity dialog and tab.  This commit
+  is internal-only.
+- CLI: `wds-optimize sweep` (if it existed) still works via the shim.
+  A new `wds-optimize sensitivity` subcommand will be added in v0.8.2.
+
 ### Added
 
 #### Sensitivity analysis interpretation (v0.7.2)

@@ -165,8 +165,8 @@ def _value_to_jsonable(v: Any) -> Any:
 
 def _parse_values_arg(raw: str) -> list:
     """Reuse the sweep parser (handles quotes, int/float/string)."""
-    from wds_optimizer.sweep.config import parse_sweep_values
-    return parse_sweep_values(raw)
+    from wds_optimizer.sensitivity.config import parse_sensitivity_values
+    return parse_sensitivity_values(raw)
 
 
 # ---------------------------------------------------------------------
@@ -227,10 +227,10 @@ def _validate_sweep_plan(plan: list[dict]) -> None:
     sweeping "GA.ga_pc" with --algo PSO).
     """
     from wds_optimizer.algorithms.registry import list_algorithms
-    from wds_optimizer.sweep.config import (
-        build_sweep_parameters, normalize_param_name,
+    from wds_optimizer.sensitivity.config import (
+        build_sensitivity_parameters, normalize_param_name,
     )
-    catalog = build_sweep_parameters()
+    catalog = build_sensitivity_parameters()
     valid_algos = set(list_algorithms())
 
     for sweep in plan:
@@ -690,7 +690,7 @@ def _run(args) -> int:
     # Deferred imports: only when actually running.
     from wds_optimizer.api import build_problem
     from wds_optimizer.algorithms.config import build_algorithm_config
-    from wds_optimizer.sweep.runner import run_parameter_sweep
+    from wds_optimizer.sensitivity.runner import run_single_sweep
 
     # Cache problem + config per benchmark so we don't reload the
     # network for every sweep of the same benchmark.
@@ -727,7 +727,7 @@ def _run(args) -> int:
               f"(runs={runs}, max_gen={max_gen})", flush=True)
 
         try:
-            result = run_parameter_sweep(
+            result = run_single_sweep(
                 problems[bench], cfgs[bench],
                 parameter_name=param,
                 values=values,

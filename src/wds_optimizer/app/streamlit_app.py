@@ -66,8 +66,10 @@ from wds_optimizer.analysis import stats as st_
 from wds_optimizer.persistence.snapshot import (
     build_snapshot, load_snapshot, restore_experiment,
 )
-from wds_optimizer.sweep.config import SWEEP_PARAMETERS, parse_sweep_values
-from wds_optimizer.sweep.runner import run_parameter_sweep
+from wds_optimizer.sensitivity.config import (
+    build_sensitivity_parameters, parse_sensitivity_values,
+)
+from wds_optimizer.sensitivity.runner import run_single_sweep
 from wds_optimizer.app.compare import (
     compute_comparison_stats, overall_stats,
 )
@@ -660,9 +662,8 @@ def _render_sidebar():
         st.header("7. Parameter Sweep")
 
         with st.expander("Configure sweep", expanded=False):
-            from wds_optimizer.sweep.config import build_sweep_parameters
             _units_for_sweep = st.session_state.get("network_units") or {}
-            _catalog = build_sweep_parameters()
+            _catalog = build_sensitivity_parameters()
 
             sweep_param = st.selectbox(
                 "Parameter",
@@ -721,7 +722,7 @@ def _render_sidebar():
         sweep_config = None
         if sweep_go:
             try:
-                vals = parse_sweep_values(sweep_vals_str)
+                vals = parse_sensitivity_values(sweep_vals_str)
                 if not sweep_algo:
                     raise ValueError("Select at least one algorithm.")
                 sweep_config = {
@@ -790,8 +791,7 @@ def _sweep_param_label(key: str, units: dict | None = None) -> str:
 
     Delegates to build_sweep_parameters() for the current catalogue.
     """
-    from wds_optimizer.sweep.config import build_sweep_parameters
-    catalog = build_sweep_parameters()
+    catalog = build_sensitivity_parameters()
     if key in catalog:
         return catalog[key]["label"]
     return key
@@ -1115,7 +1115,7 @@ def _create_sweep_history_entries(result, entry_context: dict) -> None:
     """
     import copy as _copy
     import uuid as _uuid
-    from wds_optimizer.sweep.config import normalize_param_name
+    from wds_optimizer.sensitivity.config import normalize_param_name
     from wds_optimizer.hydraulics.units import (
         pressure_to_si, velocity_to_si,
     )
@@ -1899,11 +1899,11 @@ def _start_run(algo_label: str, run_name: str = ""):
 def _start_sweep(param_name, values, algorithms, n_runs):
     _sync_sidebar_state(with_n_runs=False)
 
-    from wds_optimizer.sweep.config import (
-        build_sweep_parameters, normalize_param_name,
+    from wds_optimizer.sensitivity.config import (
+        build_sensitivity_parameters, normalize_param_name,
     )
     norm = normalize_param_name(param_name)
-    catalog = build_sweep_parameters()
+    catalog = build_sensitivity_parameters()
 
     if norm not in catalog:
         raise ValueError(
@@ -1943,7 +1943,7 @@ def _start_sweep(param_name, values, algorithms, n_runs):
     }
 
     def target(progress_cb, cancel_cb):
-        return run_parameter_sweep(
+        return run_single_sweep(
             problem, base_cfg,
             parameter_name=param_name,
             values=values,

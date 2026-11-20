@@ -1,9 +1,12 @@
-"""Parameter sweep runner.
+"""Sensitivity single-sweep runner.
 
-Runs an experiment once per value of a single parameter, keeping
+Runs one experiment per value of a single parameter, keeping
 everything else the same.  Each iteration gets a fresh copy of the
 base AlgorithmConfig and a fresh copy of problem["Constraints"] so
 constraint-value sweeps do not leak across iterations.
+
+The multi-parameter ("batch") API lives in
+wds_optimizer/sensitivity/batch.py (added in v0.8.1).
 """
 from __future__ import annotations
 
@@ -16,15 +19,15 @@ import numpy as np
 from ..algorithms.config import AlgorithmConfig, build_algorithm_config
 from ..experiments.runner import ExperimentResult, run_experiment
 from ..hydraulics.units import pressure_to_si, velocity_to_si
-from .config import build_sweep_parameters, normalize_param_name
+from .config import build_sensitivity_parameters, normalize_param_name
 
 
 @dataclass
-class SweepPointResult:
-    """Result of one value in the sweep."""
+class SingleSweepPoint:
+    """Result of one value in a single-parameter sweep."""
     value: Any
     experiment: Optional[ExperimentResult] = None
-    status: str = "NotStarted"   # Success | AllInfeasible | Failed | Cancelled
+    status: str = "NotStarted"
     best_score: float = float("inf")
     mean_score: float = float("nan")
     std_score: float = float("nan")
@@ -34,13 +37,14 @@ class SweepPointResult:
 
 
 @dataclass
-class SweepResult:
+class SingleSweepResult:
+    """Result of one single-parameter sensitivity sweep."""
     parameter: str
     values: list
     algorithms: list[str]
     n_runs: int
     experiment_seed: int
-    points: list[SweepPointResult] = field(default_factory=list)
+    points: list[SingleSweepPoint] = field(default_factory=list)
     cancelled: bool = False
 
 
@@ -48,50 +52,44 @@ class SweepResult:
 #  Applying one parameter value
 # ---------------------------------------------------------------------
 
-def _apply_sweep_param(
+def _apply_sensitivity_param(
     cfg: AlgorithmConfig,
     problem: dict,
     param_name: str,
     value: Any,
 ) -> None:
-    """Apply a sweep value to a config and/or problem.
+    """Apply a sensitivity value to a config and/or problem.
 
     Mutates ``cfg`` in place.  Mutates ``problem["Constraints"]`` in
     place (caller must pass a fresh copy of Constraints).
 
-    Raises ValueError if the parameter is unknown or the value is
-    invalid for the parameter's kind.
+    Raises ValueError if the parameter is unknown.
     """
     key = normalize_param_name(param_name)
-    catalog = build_sweep_parameters()
+    catalog = build_sensitivity_parameters()
 
     if key not in catalog:
         raise ValueError(
-            f"unknown sweep parameter {param_name!r} "
+            f"unknown sensitivity parameter {param_name!r} "
             f"(normalized: {key!r}); available: "
             f"{sorted(catalog.keys())[:10]}..."
         )
 
     info = catalog[key]
-    kind = info["kind"]
 
-    # ---- Global: scalar config fields ----
+    # ---- Global scalar config fields ----
     if key == "NS":
-        cfg.NS = int(value)
-        return
+        cfg.NS = int(value); return
     if key == "MaxGen":
-        cfg.MaxGen = int(value)
-        return
+        cfg.MaxGen = int(value); return
     if key == "n_runs":
-        # handled by run_parameter_sweep (n_runs per point)
+        # handled by run_single_sweep
         return
     if key == "seed":
-        # handled by run_parameter_sweep (per-point seed)
+        # handled by run_single_sweep
         return
     if key == "constraint_policy":
-        v = str(value)
-        cfg.constraint_policy = v
-        return
+        cfg.constraint_policy = str(value); return
 
     # ---- Global: constraint values (display units → SI) ----
     if key in ("Pmin", "Pmax", "Vmin", "Vmax"):
@@ -115,19 +113,14 @@ def _apply_sweep_param(
         family = entry.get("algorithm")
         if family is None:
             raise ValueError(
-                f"cannot apply sweep value for {key!r}: no algorithm "
-                f"associated with this parameter"
+                f"cannot apply sensitivity value for {key!r}: "
+                f"no algorithm associated with this parameter"
             )
-
-        # Plugin algorithms are NOT fields on AlgorithmConfig; their
-        # params live in cfg.extra[family].  Built-in algorithms have
-        # a matching family dataclass on the config.
+        # Plugin algorithms are not fields on AlgorithmConfig; their
+        # params live in cfg.extra[family].
         if not hasattr(cfg, family):
             cfg.extra.setdefault(family, {})[param_key] = value
             return
-
-        # Built-in algorithm: use META's maps_to to decide whether the
-        # value goes on a typed family field or into cfg.extra.
         from ..algorithms.registry import ALGORITHM_REGISTRY
         meta = ALGORITHM_REGISTRY[family]["meta"]
         maps_to = None
@@ -141,21 +134,21 @@ def _apply_sweep_param(
             if fam_cfg is None or not hasattr(fam_cfg, field_name):
                 raise ValueError(
                     f"cannot set {fam_field}.{field_name} for "
-                    f"sweep {key}: config field missing"
+                    f"sensitivity {key}: config field missing"
                 )
             setattr(fam_cfg, field_name, value)
         else:
             cfg.extra.setdefault(family, {})[param_key] = value
         return
 
-    raise ValueError(f"cannot apply sweep value for {key!r}")
+    raise ValueError(f"cannot apply sensitivity value for {key!r}")
 
 
 # ---------------------------------------------------------------------
-#  Runner
+#  Single-sweep runner
 # ---------------------------------------------------------------------
 
-def run_parameter_sweep(
+def run_single_sweep(
     problem: dict,
     base_config: AlgorithmConfig,
     *,
@@ -166,9 +159,9 @@ def run_parameter_sweep(
     experiment_seed: int,
     progress_callback: Optional[Callable] = None,
     cancel_callback: Optional[Callable] = None,
-) -> SweepResult:
+) -> SingleSweepResult:
     """Execute one experiment per value of one parameter."""
-    result = SweepResult(
+    result = SingleSweepResult(
         parameter=parameter_name,
         values=list(values),
         algorithms=list(algorithms),
@@ -181,20 +174,17 @@ def run_parameter_sweep(
             result.cancelled = True
             break
 
-        point = SweepPointResult(value=value)
+        point = SingleSweepPoint(value=value)
         try:
-            # Fresh config and fresh Constraints for each point.
             cfg = _clone_config(base_config)
-            problem_iter = dict(problem)   # shallow outer copy
+            problem_iter = dict(problem)
             problem_iter["Constraints"] = copy.deepcopy(
                 problem.get("Constraints", {})
             )
+            _apply_sensitivity_param(
+                cfg, problem_iter, parameter_name, value,
+            )
 
-            # Apply the swept value.
-            _apply_sweep_param(cfg, problem_iter, parameter_name, value)
-
-            # `n_runs` and `seed` are handled specially: they affect
-            # how many runs and which seeds, not the config itself.
             eff_n_runs = n_runs
             eff_seed = experiment_seed
             nk = normalize_param_name(parameter_name)
@@ -220,7 +210,6 @@ def run_parameter_sweep(
             point.experiment = exp
             point.mean_time = dt
 
-            # Aggregate scores
             runs = [r for runs in exp.runs.values() for r in runs]
             feasible_runs = [
                 r for r in runs
@@ -230,8 +219,12 @@ def run_parameter_sweep(
                 costs = np.array([r.score for r in feasible_runs])
                 point.best_score = float(costs.min())
                 point.mean_score = float(costs.mean())
-                point.std_score = float(costs.std(ddof=1)) if len(costs) > 1 else 0.0
-                point.feasible_pct = 100.0 * len(feasible_runs) / max(1, len(runs))
+                point.std_score = (
+                    float(costs.std(ddof=1)) if len(costs) > 1 else 0.0
+                )
+                point.feasible_pct = (
+                    100.0 * len(feasible_runs) / max(1, len(runs))
+                )
                 point.status = "Success"
             elif runs:
                 point.status = "AllInfeasible"
@@ -257,16 +250,11 @@ def run_parameter_sweep(
     return result
 
 
-# ---------------------------------------------------------------------
-#  Helpers
-# ---------------------------------------------------------------------
-
 def _clone_config(base: AlgorithmConfig) -> AlgorithmConfig:
-    """Deep-ish copy: new dataclasses for every family, shared caches."""
     from ..algorithms.config import (
         DEConfig, GAConfig, PSOConfig, RestartConfig, SADEConfig,
     )
-    cfg = AlgorithmConfig(
+    return AlgorithmConfig(
         NS=base.NS, MaxGen=base.MaxGen, Seed=base.Seed,
         Cache=base.Cache,
         GA=copy.deepcopy(base.GA),
@@ -278,14 +266,11 @@ def _clone_config(base: AlgorithmConfig) -> AlgorithmConfig:
         extra=copy.deepcopy(base.extra),
         constraint_policy=base.constraint_policy,
     )
-    return cfg
 
 
 def _wrap_progress(cb, idx: int, total: int, value):
-    """Wrap a user callback, adding PointIndex / TotalPoints / value."""
     if cb is None:
         return None
-
     def wrapper(info: dict) -> None:
         info = dict(info)
         info["PointIndex"] = idx + 1
@@ -295,5 +280,10 @@ def _wrap_progress(cb, idx: int, total: int, value):
             cb(info)
         except Exception:
             pass
-
     return wrapper
+
+
+# Aliases for backward compatibility with the old name.
+run_parameter_sweep = run_single_sweep
+SweepResult = SingleSweepResult
+SweepPointResult = SingleSweepPoint
