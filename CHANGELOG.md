@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Sensitivity batch backend (v0.8.1)
+- `wds_optimizer/sensitivity/batch.py`:
+  - `PlanRow`, `BatchPoint`, `BatchParamResult`, `BatchSweepResult`
+  - `run_batch_sweep(problem, cfg, rows=..., n_runs=..., seed=...)`
+    executes one experiment per (row, value).  Recommendation logic
+    detects `lowest_mean`, `flat_line` (<1% spread), `high_variance`,
+    and `no_successful_points`.
+  - `validate_plan(rows)` fails fast on typos / mismatches (same
+    lesson as v0.7.0's sensitivity_analysis.py validation).
+- `wds_optimizer/reporting/sensitivity.py`:
+  - `batch_report_markdown(batch, ...)` — full markdown report
+  - `batch_report_csv(batch)` — flat CSV (utf-8-sig, Excel-friendly)
+  - `load_batch_from_jsons(output_dir)` — reconstruct a batch from
+    saved JSONs (for `--regenerate-only`); handles old v0.7.1 JSONs
+    by recomputing recommendations.
+- CLI: new `wds-optimize sensitivity` subcommand:
+    --inp / --d / --cost / --diam-unit
+    --algo (repeatable)
+    --sweep "PARAM=V1,V2,..."  (repeatable)
+    --n-runs, --seed, --output-dir, --markdown, --csv
+  Reuses the existing constraint flags (`--pmin`, `--vmax`, ...).
+- `scripts/sensitivity_analysis.py` refactored to use
+  `run_batch_sweep` + `batch_report_markdown` + `load_batch_from_jsons`.
+  CLI and JSON output are byte-compatible with v0.7.1; markdown
+  format changes slightly (sections now say `## \`param\` (algorithm)`).
+
+### Notes
+- GUI unchanged.  v0.8.2 replaces the Sweep tab with a new
+  Sensitivity dialog + tab that use the same backend.
+- No regression in single-parameter sweeps: they are a one-row
+  batch internally.
+
 ### Changed
 
 #### Rename `sweep` → `sensitivity` (v0.8.0)

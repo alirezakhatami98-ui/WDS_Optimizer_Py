@@ -700,6 +700,193 @@ def cmd_plugins_load(args) -> int:
             else EXIT_UNEXPECTED)
 
 # ---------------------------------------------------------------------------
+#  Subcommand: sensitivity
+# ---------------------------------------------------------------------------
+
+def cmd_sensitivity(args) -> int:
+    """Run a batch sensitivity analysis from the CLI."""
+    from wds_optimizer.sensitivity.batch import (
+        PlanRow, run_batch_sweep, validate_plan,
+    )
+    from wds_optimizer.sensitivity.config import (
+        build_sensitivity_parameters, normalize_param_name,
+        parse_sensitivity_values,
+    )
+    from wds_optimizer.reporting.sensitivity import (
+        batch_report_markdown, batch_report_csv,
+    )
+    from wds_optimizer.api import build_problem
+    from wds_optimizer.algorithms.config import build_algorithm_config
+
+    try:
+        if not args.sweep:
+            raise ValueError("at least one --sweep is required")
+        if not args.algo:
+            raise ValueError("at least one --algo is required")
+
+        catalog = build_sensitivity_parameters()
+        rows = []
+        for spec in args.sweep:
+            if "=" not in spec:
+                raise ValueError(
+                    f"--sweep must be PARAM=V1,V2,... (got {spec!r})"
+                )
+            param, raw_vals = spec.split("=", 1)
+            param = param.strip()
+            values = parse_sensitivity_values(raw_vals)
+
+            owning = catalog.get(
+                normalize_param_name(param), {}
+            ).get("algorithm")
+            if owning:
+                if owning not in args.algo:
+                    raise ValueError(
+                        f"Parameter {param!r} belongs to {owning!r}, "
+                        f"but --algo is {args.algo}."
+                    )
+                rows.append(PlanRow(
+                    param=param, algorithm=owning, values=values,
+                ))
+            else:
+                for algo in args.algo:
+                    rows.append(PlanRow(
+                        param=param, algorithm=algo, values=values,
+                    ))
+
+        validate_plan(rows)
+
+        # Build problem
+        units_dict = _detect_display_units(args.inp)
+        constraints = _constraints_from_args(args, units_dict)
+        problem, units, wn = build_problem(
+            inp_path=args.inp,
+            d_path=args.d,
+            cost_path=args.cost,
+            diam_unit=args.diam_unit,
+            constraints=constraints,
+            fixed_pipes=args.fixed or "",
+        )
+
+        base_cfg = build_algorithm_config(
+            NS=args.ns, MaxGen=args.max_gen,
+        )
+        base_cfg.Seed = args.seed
+        base_cfg.Cache = {}
+        if args.constraint_policy:
+            base_cfg.constraint_policy = args.constraint_policy
+
+        result = run_batch_sweep(
+            problem, base_cfg,
+            rows=rows,
+            n_runs=args.n_runs,
+            experiment_seed=args.seed,
+        )
+
+        # Summary to stdout
+        for pr in result.params:
+            if pr.recommended_value is not None:
+                print(
+                    f"  {pr.param} ({pr.algorithm}): "
+                    f"recommended {pr.recommended_value}  "
+                    f"(mean ${pr.recommended_mean:,.0f}; {pr.reason})"
+                )
+            else:
+                print(
+                    f"  {pr.param} ({pr.algorithm}): {pr.reason}"
+                )
+
+        if args.output_dir:
+            from pathlib import Path
+            output_dir = Path(args.output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            for pr in result.params:
+                _save_sensitivity_param_json(
+                    pr, result, output_dir, args.inp,
+                )
+            print(f"Wrote per-param JSONs to {output_dir}")
+
+        if args.markdown:
+            from pathlib import Path
+            Path(args.markdown).write_text(
+                batch_report_markdown(result),
+                encoding="utf-8",
+            )
+            print(f"Wrote {args.markdown}")
+
+        if args.csv:
+            from pathlib import Path
+            Path(args.csv).write_bytes(batch_report_csv(result))
+            print(f"Wrote {args.csv}")
+
+        return EXIT_OK
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    except Exception as e:
+        print(f"Unexpected error: {type(e).__name__}: {e}",
+              file=sys.stderr)
+        return EXIT_UNEXPECTED
+
+
+def _save_sensitivity_param_json(pr, batch, output_dir, inp_path):
+    """Helper: save one BatchParamResult to JSON."""
+    import json
+    from datetime import datetime
+    from pathlib import Path
+    import numpy as np
+
+    bench = Path(inp_path).stem
+    out_path = (
+        output_dir / bench / pr.algorithm
+        / f"{pr.param.replace('.', '_')}.json"
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _j(v):
+        if isinstance(v, (bool, int, float, str)):
+            return v
+        return str(v)
+
+    data = {
+        "benchmark": bench,
+        "algorithm": pr.algorithm,
+        "parameter": pr.param,
+        "values": [_j(v) for v in pr.values],
+        "n_runs": batch.n_runs,
+        "experiment_seed": batch.experiment_seed,
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "recommended_value": (
+            _j(pr.recommended_value)
+            if pr.recommended_value is not None else None
+        ),
+        "recommended_mean": pr.recommended_mean,
+        "reason": pr.reason,
+        "points": [
+            {
+                "value": _j(p.value),
+                "status": p.status,
+                "best_score": (
+                    p.best_score if np.isfinite(p.best_score) else None
+                ),
+                "mean_score": (
+                    p.mean_score if np.isfinite(p.mean_score) else None
+                ),
+                "std_score": (
+                    p.std_score if np.isfinite(p.std_score) else None
+                ),
+                "feasible_pct": p.feasible_pct,
+                "mean_time_s": p.mean_time,
+                "error": p.error,
+            }
+            for p in pr.points
+        ],
+    }
+    out_path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+# ---------------------------------------------------------------------------
 #  Argument parser
 # ---------------------------------------------------------------------------
 
@@ -837,6 +1024,40 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="Overwrite if a plugin with the same "
                                 "filename exists.")
     p_pl_load.set_defaults(func=cmd_plugins_load)
+
+    p_sens = sub.add_parser(
+        "sensitivity",
+        help="Run a batch sensitivity analysis.",
+    )
+    p_sens.add_argument("--inp", required=True)
+    p_sens.add_argument("--d", required=True)
+    p_sens.add_argument("--cost", required=True)
+    p_sens.add_argument("--diam-unit", choices=["mm", "in"], default="mm")
+    _add_common_algo_args(p_sens)
+    _add_constraint_args(p_sens)
+    p_sens.add_argument(
+        "--sweep", action="append", required=True,
+        help="PARAM=V1,V2,... (repeatable).  "
+             "Examples: --sweep 'GA.ga_pc=0.6,0.7,0.8,0.9' "
+             "--sweep 'Pmin=25,30,35'",
+    )
+    p_sens.add_argument(
+        "--n-runs", type=int, default=3,
+        help="Runs per point (default 3).",
+    )
+    p_sens.add_argument(
+        "--output-dir", default=None,
+        help="Write per-parameter JSONs under this directory (optional).",
+    )
+    p_sens.add_argument(
+        "--markdown", default=None,
+        help="Write a markdown report to this path (optional).",
+    )
+    p_sens.add_argument(
+        "--csv", default=None,
+        help="Write a CSV report to this path (optional).",
+    )
+    p_sens.set_defaults(func=cmd_sensitivity)
 
     return parser
 
