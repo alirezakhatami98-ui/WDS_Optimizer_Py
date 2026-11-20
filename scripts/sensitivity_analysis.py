@@ -335,6 +335,35 @@ def _run(args) -> int:
         print(f"\nRegenerated {md_path}")
     return 0
 
+# ---------------------------------------------------------------------
+#  Thin wrappers around the shared batch/reporting logic (test-only)
+# ---------------------------------------------------------------------
+
+def _annotations_for_sweep(data: dict) -> tuple[list[str], bool]:
+    """JSON-dict wrapper around batch._annotations_for_param.
+
+    Kept as a public entry point for tests that exercise the
+    annotation logic against hand-crafted JSON.
+    """
+    from wds_optimizer.sensitivity.batch import (
+        _annotations_for_param, _batch_param_from_json,
+    )
+    pr = _batch_param_from_json(data)
+    n_runs = int(data.get("n_runs", 1))
+    return _annotations_for_param(pr, n_runs)
+
+
+def _param_section_md(param: str, data: dict) -> list[str]:
+    """JSON-dict wrapper around reporting.sensitivity._param_section.
+
+    Kept as a public entry point for tests that exercise the
+    parameter-section rendering against hand-crafted JSON.
+    """
+    from wds_optimizer.reporting.sensitivity import _param_section
+    from wds_optimizer.sensitivity.batch import _batch_param_from_json
+    pr = _batch_param_from_json(data)
+    n_runs = int(data.get("n_runs", 1))
+    return _param_section(pr, n_runs)
 
 # ---------------------------------------------------------------------
 #  CLI

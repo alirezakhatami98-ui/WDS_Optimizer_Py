@@ -14,7 +14,7 @@ from typing import Optional
 import numpy as np
 
 from ..sensitivity.batch import (
-    BatchParamResult, BatchPoint, BatchSweepResult,
+    BatchParamResult, BatchSweepResult,
 )
 
 
@@ -75,14 +75,20 @@ def batch_report_markdown(
     lines.append("")
 
     for pr in batch.params:
-        lines.extend(_param_section(pr))
+        lines.extend(_param_section(pr, batch.n_runs))
 
     return "\n".join(lines)
 
 
-def _param_section(pr: BatchParamResult) -> list[str]:
+def _param_section(pr: BatchParamResult, n_runs: int = 1) -> list[str]:
+    """Markdown section for one (parameter, algorithm) result."""
+    from ..sensitivity.batch import _annotations_for_param
+
+    header = f"\n## `{pr.param}`  ({pr.algorithm})"
+    if pr.benchmark_name:
+        header += f"  —  {pr.benchmark_name}"
     lines = [
-        f"\n## `{pr.param}`  ({pr.algorithm})",
+        header,
         "",
         "| Value | Best | Mean | Std | Feasible % | Time (s) |",
         "|-------|------|------|-----|------------|----------|",
@@ -94,14 +100,27 @@ def _param_section(pr: BatchParamResult) -> list[str]:
             f"{p.feasible_pct:.0f}% | {p.mean_time:.1f} |"
         )
 
-    if pr.recommended_value is not None:
+    # Annotations (failures, flat-line, significance, variance, timing)
+    notes, is_flat = _annotations_for_param(pr, n_runs)
+    for note in notes:
+        lines.append(f"- {note}")
+    if notes:
+        lines.append("")
+
+    # Recommendation (suppressed when flat-line)
+    if is_flat:
         lines.append(
-            f"\n**Recommended:** `{pr.param} = "
+            "**No recommendation** — the parameter has no measurable "
+            "effect on this benchmark."
+        )
+    elif pr.recommended_value is not None:
+        lines.append(
+            f"**Recommended:** `{pr.param} = "
             f"{_fmt_value(pr.recommended_value)}` "
             f"(mean {_fmt_cost(pr.recommended_mean)}; {pr.reason})"
         )
     elif pr.reason:
-        lines.append(f"\n**Note:** {pr.reason}")
+        lines.append(f"**Note:** {pr.reason}")
 
     return lines
 
@@ -165,6 +184,8 @@ def load_batch_from_jsons(output_dir: Path) -> Optional[BatchSweepResult]:
     n_runs = 1
     seed = 42
 
+    from ..sensitivity.batch import _batch_param_from_json
+
     for jp in jsons:
         try:
             data = json.loads(jp.read_text(encoding="utf-8"))
@@ -175,47 +196,7 @@ def load_batch_from_jsons(output_dir: Path) -> Optional[BatchSweepResult]:
         n_runs = int(data.get("n_runs", n_runs))
         seed = int(data.get("experiment_seed", seed))
 
-        pr = BatchParamResult(
-            param=data["parameter"],
-            algorithm=data["algorithm"],
-            values=list(data["values"]),
-        )
-        for pd in data.get("points", []):
-            point = BatchPoint(
-                param=data["parameter"],
-                algorithm=data["algorithm"],
-                value=pd["value"],
-                status=pd.get("status", "Failed"),
-                best_score=(
-                    float(pd["best_score"])
-                    if pd.get("best_score") is not None
-                    else float("inf")
-                ),
-                mean_score=(
-                    float(pd["mean_score"])
-                    if pd.get("mean_score") is not None
-                    else float("nan")
-                ),
-                std_score=(
-                    float(pd["std_score"])
-                    if pd.get("std_score") is not None
-                    else float("nan")
-                ),
-                feasible_pct=float(pd.get("feasible_pct", 0.0)),
-                mean_time=float(pd.get("mean_time_s", 0.0)),
-                error=pd.get("error", ""),
-            )
-            pr.points.append(point)
-
-        # Use saved recommendation if present; else recompute.
-        if "recommended_value" in data:
-            pr.recommended_value = data["recommended_value"]
-            pr.recommended_mean = data.get("recommended_mean")
-            pr.reason = data.get("reason", "")
-        else:
-            from ..sensitivity.batch import _compute_recommendation
-            _compute_recommendation(pr)
-
+        pr = _batch_param_from_json(data)
         params.append(pr)
 
     if not params:

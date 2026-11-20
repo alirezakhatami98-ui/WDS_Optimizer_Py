@@ -75,6 +75,7 @@ class BatchParamResult:
     recommended_value: Optional[Any] = None
     recommended_mean: Optional[float] = None
     reason: str = ""
+    benchmark_name: str = ""   # set by load_batch_from_jsons (may be empty)
 
 
 @dataclass
@@ -176,6 +177,147 @@ def _compute_recommendation(pr: BatchParamResult) -> None:
     else:
         pr.reason = "lowest_mean"
 
+# ---------------------------------------------------------------------
+#  JSON reconstruction and annotation helpers
+# ---------------------------------------------------------------------
+
+def _batch_param_from_json(data: dict) -> BatchParamResult:
+    """Rebuild a BatchParamResult from a per-parameter JSON dict.
+
+    Format matches what _save_batch_param_json writes (and what
+    sensitivity_analysis.py has written since v0.7.1).
+    """
+    pr = BatchParamResult(
+        param=data["parameter"],
+        algorithm=data["algorithm"],
+        values=list(data["values"]),
+        benchmark_name=data.get("benchmark", ""),
+    )
+    for pd in data.get("points", []):
+        best = pd.get("best_score")
+        mean = pd.get("mean_score")
+        std = pd.get("std_score")
+        pr.points.append(BatchPoint(
+            param=data["parameter"],
+            algorithm=data["algorithm"],
+            value=pd["value"],
+            status=pd.get("status", "Failed"),
+            best_score=float(best) if best is not None else float("inf"),
+            mean_score=float(mean) if mean is not None else float("nan"),
+            std_score=float(std) if std is not None else float("nan"),
+            feasible_pct=float(pd.get("feasible_pct", 0.0)),
+            mean_time=float(pd.get("mean_time_s", 0.0)),
+            error=pd.get("error", ""),
+        ))
+    # Use saved recommendation if present; else recompute.
+    if "recommended_value" in data:
+        pr.recommended_value = data.get("recommended_value")
+        pr.recommended_mean = data.get("recommended_mean")
+        pr.reason = data.get("reason", "")
+    else:
+        _compute_recommendation(pr)
+    return pr
+
+
+_TIMING_ANOMALY_RATIO = 1.5   # 1.5x slower than median
+_HIGH_CV = 0.03               # CV > 3% = "high variance" (per point)
+
+
+def _annotations_for_param(
+    pr: BatchParamResult, n_runs: int,
+) -> tuple[list[str], bool]:
+    """Human-readable notes for a BatchParamResult.
+
+    Returns ``(notes, is_flat)`` where:
+    - notes is a list of strings suitable for rendering in markdown
+    - is_flat is True when means are within 1% (no effect detected)
+
+    Checks performed (each contributes at most one line to notes):
+      1. Failed points (any status not Success / AllInfeasible).
+      2. Flat line: all successful means within 1%.
+      3. Significance: best mean vs runner-up, using 2·SEM.
+      4. High variance: any successful point with CV > 3%.
+      5. Timing anomaly: any successful point 1.5x slower than median.
+    """
+    notes: list[str] = []
+
+    successes = [
+        p for p in pr.points
+        if p.status == "Success" and np.isfinite(p.mean_score)
+    ]
+    failures = [
+        p for p in pr.points
+        if p.status not in ("Success", "AllInfeasible")
+    ]
+
+    # ---- 1. Failures ----
+    if failures:
+        first = failures[0]
+        msg = f"{len(failures)} point(s) failed"
+        if first.error:
+            msg += f": {first.error[:100]}"
+        notes.append(msg)
+
+    if not successes:
+        return notes, False
+
+    # ---- 2. Flat line ----
+    means = [p.mean_score for p in successes]
+    lo, hi = min(means), max(means)
+    is_flat = False
+    if hi > 0 and (hi - lo) / lo < _FLAT_LINE_TOLERANCE:
+        is_flat = True
+        notes.append(
+            f"Flat line: means ${lo:,.0f}–${hi:,.0f} "
+            f"(<{_FLAT_LINE_TOLERANCE * 100:.0f}% spread; parameter "
+            f"has no measurable effect)"
+        )
+
+    # ---- 3. Significance (only when not flat and 2+ successes) ----
+    if not is_flat and len(successes) >= 2:
+        ranked = sorted(successes, key=lambda p: p.mean_score)
+        best, runner = ranked[0], ranked[1]
+        gap = runner.mean_score - best.mean_score
+        sqrt_n = float(np.sqrt(max(1, n_runs)))
+        sem_best = best.std_score / sqrt_n
+        sem_runner = runner.std_score / sqrt_n
+        combined_sem = float(np.sqrt(sem_best ** 2 + sem_runner ** 2))
+        two_sem = 2 * combined_sem
+        if combined_sem > 0 and gap > two_sem:
+            notes.append(
+                f"Significant: best ${best.mean_score:,.0f} at "
+                f"value={best.value} vs runner-up "
+                f"${runner.mean_score:,.0f} at value={runner.value} "
+                f"(gap ${gap:,.0f} > 2·SEM ${two_sem:,.0f})"
+            )
+        elif combined_sem > 0:
+            notes.append(
+                f"Not significant: gap ${gap:,.0f} between best and "
+                f"runner-up vs 2·SEM ${two_sem:,.0f}"
+            )
+
+    # ---- 4. High variance (per point, CV > 3%) ----
+    for p in successes:
+        if p.mean_score > 0:
+            cv = p.std_score / p.mean_score
+            if cv > _HIGH_CV:
+                notes.append(
+                    f"High variance at value={p.value}: "
+                    f"CV = {cv * 100:.1f}%"
+                )
+
+    # ---- 5. Timing anomaly ----
+    times = [p.mean_time for p in successes if p.mean_time > 0]
+    if times:
+        median_t = float(np.median(times))
+        for p in successes:
+            if p.mean_time > _TIMING_ANOMALY_RATIO * median_t:
+                notes.append(
+                    f"Timing anomaly at value={p.value}: "
+                    f"{p.mean_time:.1f}s vs median {median_t:.1f}s"
+                )
+
+    return notes, is_flat
 
 # ---------------------------------------------------------------------
 #  Runner
@@ -219,6 +361,8 @@ def run_batch_sweep(
             algorithm=row.algorithm,
             values=list(row.values),
         )
+        # If the caller passed a benchmark name on `problem`, keep it.
+        pr.benchmark_name = str(problem.get("_benchmark_name", ""))
 
         for value in row.values:
             if cancel_callback is not None and cancel_callback():

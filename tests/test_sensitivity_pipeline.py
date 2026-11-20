@@ -177,7 +177,8 @@ def test_unknown_param_errors(script, tmp_path, capsys):
     ])
     assert code != 0
     err = capsys.readouterr().err
-    assert "Unknown sweep parameter" in err
+    # v0.8.0 renamed "sweep parameter" -> "parameter" throughout.
+    assert "Unknown parameter" in err
     # Nothing was written
     assert not any(tmp_path.rglob("*.json"))
 
