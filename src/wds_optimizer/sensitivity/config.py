@@ -139,9 +139,11 @@ def build_sensitivity_parameters() -> dict[str, dict]:
     return catalog
 
 
-# Alias for backward compatibility.
-SWEEP_PARAMETERS = build_sensitivity_parameters()
-# Alias for backward compatibility.
+# Primary name (v0.8.0).
+SENSITIVITY_PARAMETERS = build_sensitivity_parameters()
+
+# Aliases for backward compatibility with v0.6/v0.7.
+SWEEP_PARAMETERS = SENSITIVITY_PARAMETERS
 build_sweep_parameters = build_sensitivity_parameters
 
 
