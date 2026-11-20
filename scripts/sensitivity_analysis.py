@@ -356,12 +356,17 @@ def _annotations_for_sweep(data: dict) -> tuple[list[str], bool]:
 def _param_section_md(param: str, data: dict) -> list[str]:
     """JSON-dict wrapper around reporting.sensitivity._param_section.
 
-    Kept as a public entry point for tests that exercise the
-    parameter-section rendering against hand-crafted JSON.
+    The ``param`` argument overrides ``data["parameter"]`` for the
+    section header.  This lets tests (and future callers) render a
+    section labelled with a parameter name that differs from the one
+    stored in the JSON — useful when validating rendering across
+    parameters with shared fixtures.  In production the two always
+    match.
     """
     from wds_optimizer.reporting.sensitivity import _param_section
     from wds_optimizer.sensitivity.batch import _batch_param_from_json
     pr = _batch_param_from_json(data)
+    pr.param = param   # honor the caller's choice for the header
     n_runs = int(data.get("n_runs", 1))
     return _param_section(pr, n_runs)
 
