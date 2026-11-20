@@ -1033,17 +1033,31 @@ def _build_parser() -> argparse.ArgumentParser:
     p_sens.add_argument("--d", required=True)
     p_sens.add_argument("--cost", required=True)
     p_sens.add_argument("--diam-unit", choices=["mm", "in"], default="mm")
-    _add_common_algo_args(p_sens)
+    # NOTE: do not call _add_common_algo_args here — it adds --n-runs
+    # with default=1, which conflicts with our --n-runs default=3 and
+    # also with our --sweep flag.  We define the algorithm-related
+    # flags explicitly with sensitivity-appropriate defaults.
+    p_sens.add_argument(
+        "--algo", action="append", choices=list_algorithms(),
+        help="Algorithm(s) to analyze; repeat for multiple.",
+    )
+    p_sens.add_argument("--seed", type=int, default=42,
+                        help="Experiment seed (default 42).")
+    p_sens.add_argument("--ns", type=int, default=100,
+                        help="Population / swarm size (default 100).")
+    p_sens.add_argument("--max-gen", type=int, default=500,
+                        help="Max generations (default 500).")
+    p_sens.add_argument(
+        "--n-runs", type=int, default=3,
+        help="Runs per point (default 3).  Use >= 5 for reliable "
+             "statistics.",
+    )
     _add_constraint_args(p_sens)
     p_sens.add_argument(
         "--sweep", action="append", required=True,
         help="PARAM=V1,V2,... (repeatable).  "
              "Examples: --sweep 'GA.ga_pc=0.6,0.7,0.8,0.9' "
              "--sweep 'Pmin=25,30,35'",
-    )
-    p_sens.add_argument(
-        "--n-runs", type=int, default=3,
-        help="Runs per point (default 3).",
     )
     p_sens.add_argument(
         "--output-dir", default=None,

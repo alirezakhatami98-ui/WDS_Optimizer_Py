@@ -311,7 +311,10 @@ def test_markdown_contains_sections():
     assert "## `NS`" in md
     assert "| Value | Best | Mean | Std" in md
     assert "**Recommended:** `GA.ga_pc = 0.9`" in md
-    assert "lowest_mean" in md
+    # v0.8.1 translates the internal reason ID "lowest_mean" to
+    # "lowest mean cost" in the markdown output.  The old test asserted
+    # the internal ID; the display form is what users see.
+    assert "lowest mean cost" in md
 
 
 def test_markdown_cancelled_note():
