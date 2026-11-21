@@ -66,9 +66,17 @@ from wds_optimizer.analysis import stats as st_
 from wds_optimizer.persistence.snapshot import (
     build_snapshot, load_snapshot, restore_experiment,
 )
-from wds_optimizer.sensitivity.config import (
-    build_sensitivity_parameters, parse_sensitivity_values,
+from wds_optimizer.sensitivity.batch import (
+    PlanRow, run_batch_sweep, validate_plan, _annotations_for_param,
 )
+from wds_optimizer.sensitivity.config import (
+    build_sensitivity_parameters, normalize_param_name,
+    parse_sensitivity_values,
+)
+from wds_optimizer.reporting.sensitivity import (
+    batch_report_markdown, batch_report_csv,
+)
+from wds_optimizer.reporting.sensitivity import _fmt_cost
 from wds_optimizer.sensitivity.runner import run_single_sweep
 from wds_optimizer.app.compare import (
     compute_comparison_stats, overall_stats,
@@ -546,10 +554,27 @@ def _render_sidebar():
             if _loaded_ids else "🔌 Plugins"
         )
         with st.expander(_plugins_header, expanded=False):
-            _render_plugins_panel()    
+            _render_plugins_panel()
 
+        # ---- 4. Sensitivity Analysis ----
         st.divider()
-        st.header("4. Experiment")
+        st.header("4. Sensitivity Analysis")
+        st.caption(
+            "Analyze how parameter values affect the result. "
+            "Opens a dialog to define a batch of parameter sweeps "
+            "for the current network and algorithms."
+        )
+        if st.button(
+            "📊 Open sensitivity analysis…",
+            width="stretch",
+            disabled=busy,
+        ):
+            st.session_state.sensitivity_dialog_open = True
+            st.rerun()  
+
+        # ---- 5. Experiment ----
+        st.divider()
+        st.header("5. Experiment")
 
         # Clear run name after a successful run (sentinel).
         if st.session_state.pop("_clear_run_name", False):
@@ -582,12 +607,12 @@ def _render_sidebar():
         # records every run, and loading new input files above clears
         # stale results automatically.  No user action needed.)
 
-        # ---- 5. Snapshot ----
+        # ---- 6. Snapshot ----
         st.divider()
-        st.header("5. Snapshot (single experiment)")
+        st.header("6. Snapshot (single experiment)")
         st.caption(
             "Save or restore one experiment as a JSON.  For a whole "
-            "session's runs, use History (section 6)."
+            "session's runs, use History (section 7)."
         )
 
         if st.session_state.experiment is not None:
@@ -652,87 +677,10 @@ def _render_sidebar():
                 except Exception as e:
                     st.error(f"Load failed: {e}")
         
-        # ---- 6. History ----
+        # ---- 7. History ----
         st.divider()
-        st.header("6. History (all runs)")
+        st.header("7. History (all runs)")
         _render_history_section()
-        
-        # ---- 7. Sweep ----
-        st.divider()
-        st.header("7. Parameter Sweep")
-
-        with st.expander("Configure sweep", expanded=False):
-            _units_for_sweep = st.session_state.get("network_units") or {}
-            _catalog = build_sensitivity_parameters()
-
-            sweep_param = st.selectbox(
-                "Parameter",
-                list(_catalog.keys()),
-                format_func=lambda k: _catalog[k]["label"],
-                key="sweep_param_input",
-            )
-
-            # Contextual hint for constraint values and choice params.
-            _info = _catalog[sweep_param]
-            _kind = _info.get("kind", "")
-            if _kind == "choice":
-                st.caption(
-                    f"Allowed values: "
-                    f"{', '.join(map(str, _info.get('choices', [])))}"
-                )
-            elif "unit" in _info:
-                if _info["unit"] == "pressure":
-                    u = _units_for_sweep.get("PressureUnit", "m")
-                elif _info["unit"] == "velocity":
-                    u = _units_for_sweep.get("VelocityUnit", "m/s")
-                else:
-                    u = ""
-                st.caption(
-                    f"Values are in {u} (the network's unit).  "
-                    f"Sweeping this constraint enables it automatically."
-                )
-
-            sweep_vals_str = st.text_input(
-                "Values (comma-separated)",
-                key="sweep_vals_input",
-                placeholder="e.g. 0.6, 0.7, 0.8, 0.9",
-            )
-            # Same pattern as constraint_policy: set the session_state
-            # default before creating the widget, then use `key=` only.
-            # This avoids the "created with default AND set via session
-            # state" warning and works correctly on rerun.
-            if "sweep_algo_input" not in st.session_state:
-                st.session_state.sweep_algo_input = ["GA"]
-            sweep_algo = st.multiselect(
-                "Algorithms",
-                options=list_algorithms(),
-                format_func=_algo_display_label,
-                key="sweep_algo_input",
-            )
-            sweep_runs = st.number_input(
-                "Runs per point", 1, 20, value=1, step=1,
-                key="sweep_runs_input",
-            )
-
-        sweep_go = _job_button(
-            "sweep", "🔍 Run sweep", "⏹ Cancel sweep",
-            enabled=bool(st.session_state.inp_path),
-        )
-
-        sweep_config = None
-        if sweep_go:
-            try:
-                vals = parse_sensitivity_values(sweep_vals_str)
-                if not sweep_algo:
-                    raise ValueError("Select at least one algorithm.")
-                sweep_config = {
-                    "param_name": sweep_param,
-                    "values": vals,
-                    "algorithms": sweep_algo,
-                    "n_runs": int(sweep_runs),
-                }
-            except ValueError as e:
-                st.error(f"Invalid sweep config: {e}")
 
         # ---- 8. Reproducibility Report ----
         st.divider()
@@ -782,19 +730,8 @@ def _render_sidebar():
 
     return {
         "run_clicked": run_clicked,
-        "algo_label": algo,         # ← درست: algo همان مقدار st.radio است
-        "sweep": sweep_config,
+        "algo_label": algo,
     }
-
-def _sweep_param_label(key: str, units: dict | None = None) -> str:
-    """Return a human-readable label for a sweep parameter.
-
-    Delegates to build_sweep_parameters() for the current catalogue.
-    """
-    catalog = build_sensitivity_parameters()
-    if key in catalog:
-        return catalog[key]["label"]
-    return key
 
 def _format_sweep_value(v) -> str:
     """Format a sweep value for display.
@@ -981,6 +918,532 @@ def _algorithm_params_from_sidebar(algorithms: list[str]) -> dict:
             params[p["key"]] = st.session_state.get(wk, p["default"])
         out[sid] = params
     return out
+
+def _make_default_plan(algos: list[str]) -> list[dict]:
+    """Default sensitivity plan for the given algorithms.
+
+    Each entry is {id, param, values, enabled}.  Keys are chosen
+    from the most impactful parameters per algorithm, with sensible
+    starting ranges from docs/parameters.md.
+    """
+    import uuid as _uuid
+
+    defaults = {
+        "GA.ga_pc": "0.6, 0.7, 0.8, 0.9",
+        "GA.ga_pm": "0.01, 0.03, 0.05, 0.1",
+        "GA.ga_sel": "tournament, roulette",
+        "PSO.pso_w": "0.5, 0.7, 0.9",
+        "PSO.pso_c1": "1.0, 1.5, 2.0",
+        "DE.de_f": "0.3, 0.5, 0.7",
+        "DE.de_cr": "0.3, 0.5, 0.9",
+        "DE.de_strategy": "rand/1/bin, best/1/bin",
+        "SADE.sade_stag": "100, 300, 500",
+        "SADE.sade_tol": "1e-5, 1e-6, 1e-7",
+    }
+    rows = []
+    for algo in algos:
+        for k, v in defaults.items():
+            if k.startswith(algo + "."):
+                rows.append({
+                    "id": _uuid.uuid4().hex,
+                    "param": k,
+                    "values": v,
+                    "enabled": True,
+                })
+    return rows
+
+
+@st.dialog("Sensitivity Analysis")
+def _sensitivity_dialog():
+    """Multi-OAT sensitivity analysis dialog.
+
+    Renders a list of (parameter, values) rows with checkboxes,
+    allows add/delete/reset, and starts a batch job on Run.
+    """
+    import uuid as _uuid
+
+    # Lazy init
+    if st.session_state.get("sensitivity_plan") is None:
+        st.session_state.sensitivity_plan = _make_default_plan(
+            list(st.session_state.get("algo_input", ["GA"]))
+        )
+    if st.session_state.get("sensitivity_algos") is None:
+        st.session_state.sensitivity_algos = list(
+            st.session_state.get("algo_input", ["GA"])
+        )
+
+    catalog = build_sensitivity_parameters()
+    catalog_keys = list(catalog.keys())
+
+    # ---- Algorithm(s) ----
+    algos = st.multiselect(
+        "Algorithm(s) to analyze",
+        options=list_algorithms(),
+        format_func=_algo_display_label,
+        key="sensitivity_algos_widget",
+        default=st.session_state.sensitivity_algos,
+    )
+    st.session_state.sensitivity_algos = algos
+
+    # ---- Runs per point ----
+    runs = st.number_input(
+        "Runs per point",
+        min_value=1, max_value=50,
+        value=int(st.session_state.sensitivity_runs), step=1,
+        key="sensitivity_runs_widget",
+        help="Use ≥ 5 for reliable statistics.",
+    )
+    st.session_state.sensitivity_runs = int(runs)
+
+    # ---- Plan rows ----
+    st.markdown("**Plan**")
+
+    to_delete = None
+    for row in st.session_state.sensitivity_plan:
+        rid = row["id"]
+        c1, c2, c3, c4 = st.columns([1, 3, 4, 1])
+
+        en_key = f"sen_en_{rid}"
+        par_key = f"sen_par_{rid}"
+        val_key = f"sen_val_{rid}"
+        if en_key not in st.session_state:
+            st.session_state[en_key] = bool(row["enabled"])
+        if par_key not in st.session_state:
+            st.session_state[par_key] = row["param"]
+        if val_key not in st.session_state:
+            st.session_state[val_key] = row["values"]
+
+        with c1:
+            row["enabled"] = st.checkbox(
+                "Enabled", key=en_key, label_visibility="collapsed",
+            )
+        with c2:
+            cur = st.session_state[par_key]
+            if cur not in catalog_keys:
+                cur = catalog_keys[0]
+                st.session_state[par_key] = cur
+            row["param"] = st.selectbox(
+                "Parameter", options=catalog_keys, key=par_key,
+                format_func=lambda k: catalog[k]["label"],
+                label_visibility="collapsed",
+            )
+        with c3:
+            row["values"] = st.text_input(
+                "Values", key=val_key,
+                placeholder="e.g. 0.6, 0.7, 0.8, 0.9",
+                label_visibility="collapsed",
+            )
+        with c4:
+            if st.button("🗑", key=f"sen_del_{rid}"):
+                to_delete = rid
+
+        # Contextual hint for choice params
+        info = catalog.get(row["param"], {})
+        if info.get("kind") == "choice" and info.get("choices"):
+            st.caption(
+                f"  ↳ Allowed: {', '.join(map(str, info['choices']))}"
+            )
+
+    if to_delete:
+        st.session_state.sensitivity_plan = [
+            r for r in st.session_state.sensitivity_plan
+            if r["id"] != to_delete
+        ]
+        for k in (f"sen_en_{to_delete}", f"sen_par_{to_delete}",
+                  f"sen_val_{to_delete}"):
+            st.session_state.pop(k, None)
+        st.rerun()
+
+    # ---- Add / Reset ----
+    c_add, c_reset = st.columns(2)
+    with c_add:
+        if st.button("+ Add parameter", width="stretch"):
+            new_id = _uuid.uuid4().hex
+            default_param = catalog_keys[0]
+            default_vals = "0.5, 0.7, 0.9"
+            st.session_state[f"sen_en_{new_id}"] = True
+            st.session_state[f"sen_par_{new_id}"] = default_param
+            st.session_state[f"sen_val_{new_id}"] = default_vals
+            st.session_state.sensitivity_plan.append({
+                "id": new_id,
+                "param": default_param,
+                "values": default_vals,
+                "enabled": True,
+            })
+            st.rerun()
+    with c_reset:
+        if st.button("Reset to defaults", width="stretch"):
+            st.session_state.sensitivity_plan = _make_default_plan(algos)
+            # Drop stale widget state
+            for k in [k for k in list(st.session_state.keys())
+                      if k.startswith("sen_")]:
+                st.session_state.pop(k, None)
+            st.rerun()
+
+    # ---- Estimate ----
+    enabled_rows = [r for r in st.session_state.sensitivity_plan
+                    if r["enabled"]]
+    n_values = 0
+    for r in enabled_rows:
+        try:
+            n_values += len(parse_sensitivity_values(r["values"]))
+        except ValueError:
+            pass
+    st.caption(
+        f"Total: {len(enabled_rows)} parameter(s) × ~{n_values} "
+        f"value(s) × {runs} run(s) = ~{n_values * int(runs)} runs"
+    )
+
+    # ---- Actions ----
+    c_run, c_cancel = st.columns(2)
+    with c_run:
+        if st.button("▶ Run batch", type="primary", width="stretch"):
+            try:
+                _start_sensitivity_batch(
+                    plan_rows=enabled_rows,
+                    algos=algos,
+                    runs=int(runs),
+                )
+                st.session_state.sensitivity_dialog_open = False
+                st.rerun()
+            except ValueError as e:
+                st.error(f"Cannot start: {e}")
+    with c_cancel:
+        if st.button("Cancel", width="stretch"):
+            st.session_state.sensitivity_dialog_open = False
+            st.rerun()
+
+
+def _start_sensitivity_batch(*, plan_rows, algos, runs):
+    """Validate and start a sensitivity batch as a background job."""
+    import copy as _copy
+
+    if not plan_rows:
+        raise ValueError("No enabled parameters in the plan.")
+    if not algos:
+        raise ValueError("Select at least one algorithm.")
+
+    catalog = build_sensitivity_parameters()
+
+    backend_rows: list[PlanRow] = []
+    skipped = []
+    for r in plan_rows:
+        try:
+            values = parse_sensitivity_values(r["values"])
+        except ValueError as e:
+            raise ValueError(f"Cannot parse {r['param']}: {e}")
+        if not values:
+            continue
+        owning = catalog.get(
+            normalize_param_name(r["param"]), {}
+        ).get("algorithm")
+        if owning and owning not in algos:
+            skipped.append(r["param"])
+            continue
+        backend_rows.append(PlanRow(
+            param=r["param"],
+            algorithm=owning or algos[0],
+            values=values,
+        ))
+    if not backend_rows:
+        raise ValueError(
+            "No parameters remain after filtering by algorithm "
+            + (f"({skipped} skipped)" if skipped else "")
+        )
+    if skipped:
+        st.warning(
+            f"Skipped params for unselected algorithms: {skipped}"
+        )
+
+    try:
+        validate_plan(backend_rows)
+    except ValueError as e:
+        raise ValueError(str(e))
+
+    problem, units, wn = _prepare_problem()
+    base_cfg = _build_base_cfg()
+    seed = int(st.session_state.exp_seed)
+
+    entry_context = {
+        "inp_path": st.session_state.get("inp_path", ""),
+        "d_path": st.session_state.get("d_path", ""),
+        "cost_path": st.session_state.get("cost_path", ""),
+        "diam_unit": str(st.session_state.get("diam_unit_input", "mm")),
+        "constraints": _copy.deepcopy(problem["Constraints"]),
+        "units": _copy.deepcopy(units),
+        "algorithm_params": _algorithm_params_from_sidebar(algos),
+        "constraint_policy": str(base_cfg.constraint_policy),
+        "fixed_pipes": str(st.session_state.get("fixed_pipes_input", "")),
+    }
+
+    n_values = sum(len(r.values) for r in backend_rows)
+    summary = (
+        f"**Sensitivity batch:** {len(backend_rows)} parameter(s) × "
+        f"~{n_values} value(s) × {runs} run(s) | "
+        f"Algorithms: {', '.join(algos)}"
+    )
+
+    def target(progress_cb, cancel_cb):
+        return run_batch_sweep(
+            problem, base_cfg,
+            rows=backend_rows,
+            n_runs=runs,
+            experiment_seed=seed,
+            progress_callback=progress_cb,
+            cancel_callback=cancel_cb,
+        )
+
+    job = BackgroundJob(
+        "sensitivity", label="Sensitivity Analysis",
+        context={
+            "problem": problem, "units": units, "wn": wn,
+            "algos": algos, "runs": runs,
+            "entry_context": entry_context,
+            "summary": summary,
+        },
+    )
+    job.start(target)
+    st.session_state.job = job
+    st.session_state.job_notice = None
+
+
+def _finalize_sensitivity(job: BackgroundJob):
+    """Runs in main thread after the worker ends."""
+    st.session_state.job = None
+    elapsed = job.elapsed
+
+    if job.error is not None:
+        _notice("error",
+                f"Sensitivity batch failed: {type(job.error).__name__}: "
+                f"{job.error}", job.error_trace)
+        st.rerun()
+
+    result = job.result
+    ctx = job.context
+
+    batches = st.session_state.get("sensitivity_batches") or []
+    record = {
+        "batch": result,
+        "benchmark_name": Path(
+            ctx["entry_context"]["inp_path"]
+        ).stem,
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "algos": list(ctx["algos"]),
+        "runs": int(ctx["runs"]),
+        "cancelled": bool(result.cancelled),
+    }
+    batches.append(record)
+    st.session_state.sensitivity_batches = batches
+
+    try:
+        _create_sensitivity_history_entries(
+            result, ctx["entry_context"], len(batches) - 1,
+        )
+    except Exception as e:
+        print(f"[finalize_sensitivity] history append failed: {e}")
+
+    n_done = result.points_done
+    n_total = result.total_points
+    if result.cancelled:
+        _notice("warning",
+                f"Sensitivity batch cancelled after {n_done}/{n_total} "
+                f"points ({elapsed:.1f}s).  Partial results kept.")
+    else:
+        _notice("success",
+                f"Sensitivity batch complete ({n_done} points, "
+                f"{elapsed:.1f}s).  See the Sensitivity tab.")
+
+    st.session_state._clear_run_name = True
+    st.rerun()
+
+
+def _create_sensitivity_history_entries(
+    batch, entry_context: dict, batch_idx: int,
+) -> None:
+    """Create one HistoryEntry per point in a sensitivity batch.
+
+    All entries share one sweep_group_id so the History panel groups
+    them as a single unit.
+    """
+    import copy as _copy
+    import uuid as _uuid
+    from wds_optimizer.hydraulics.units import (
+        pressure_to_si, velocity_to_si,
+    )
+
+    group_id = _uuid.uuid4().hex
+    units = entry_context.get("units") or {}
+    user_name = str(st.session_state.get("run_name_input", "")).strip()
+    base_name = (
+        (user_name + " (sensitivity)") if user_name
+        else f"Sensitivity batch #{batch_idx + 1}"
+    )
+
+    for pr in batch.params:
+        for point in pr.points:
+            if point.experiment is None:
+                continue
+
+            norm_param = normalize_param_name(pr.param)
+            entry_constraints = _copy.deepcopy(
+                entry_context.get("constraints") or {}
+            )
+            entry_algo_params = _copy.deepcopy(
+                entry_context.get("algorithm_params") or {}
+            )
+            entry_policy = entry_context.get(
+                "constraint_policy", "deb_prefers",
+            )
+
+            if norm_param in ("Pmin", "Pmax", "Vmin", "Vmax"):
+                try:
+                    if norm_param in ("Pmin", "Pmax"):
+                        si = pressure_to_si(float(point.value), units)
+                    else:
+                        si = velocity_to_si(float(point.value), units)
+                    entry_constraints[norm_param] = {
+                        "enabled": True, "value": float(si),
+                    }
+                except Exception:
+                    pass
+            elif norm_param == "constraint_policy":
+                entry_policy = str(point.value)
+            elif "." in norm_param:
+                aid, pkey = norm_param.split(".", 1)
+                if aid in entry_algo_params:
+                    entry_algo_params[aid][pkey] = point.value
+
+            entry_name = (
+                f"{base_name} · {pr.param}="
+                f"{_format_sweep_value(point.value)}"
+            )
+            entry = new_entry(
+                entry_name,
+                inp_path=entry_context.get("inp_path", ""),
+                d_path=entry_context.get("d_path", ""),
+                cost_path=entry_context.get("cost_path", ""),
+                diam_unit=entry_context.get("diam_unit", "mm"),
+                algorithms=[pr.algorithm],
+                n_runs=int(batch.n_runs),
+                seed=int(batch.experiment_seed),
+                ns=int(getattr(point.experiment, "NS", 100)),
+                max_gen=int(getattr(point.experiment, "MaxGen", 500)),
+                constraints=entry_constraints,
+                algorithm_params=entry_algo_params,
+                constraint_policy=entry_policy,
+                fixed_pipes=entry_context.get("fixed_pipes", ""),
+            )
+            entry.experiment = point.experiment
+            entry.elapsed_seconds = float(point.mean_time or 0.0)
+            entry.status = (
+                "Cancelled"
+                if getattr(point.experiment, "cancelled", False)
+                else "Complete"
+            )
+            entry.sweep_group_id = group_id
+            entry.sweep_meta = {
+                "param": pr.param,
+                "value": point.value,
+                "algorithm": pr.algorithm,
+            }
+            st.session_state.history.append(entry)
+
+
+def _render_sensitivity_tab():
+    """Report tab for sensitivity batches (current session)."""
+    batches = st.session_state.get("sensitivity_batches") or []
+    if not batches:
+        st.info(
+            "No sensitivity batches yet.  Run one from the sidebar "
+            "(section 4: Sensitivity Analysis)."
+        )
+        return
+
+    labels = [
+        f"#{i+1}: {b['benchmark_name']} — "
+        f"{len(b['batch'].params)} param(s), "
+        f"{b['batch'].points_done} points "
+        f"({b['timestamp']})"
+        for i, b in enumerate(batches)
+    ]
+    idx = st.selectbox(
+        "Batch", range(len(batches)),
+        format_func=lambda i: labels[i],
+        index=len(batches) - 1,
+        key="sensitivity_batch_selector",
+    )
+    record = batches[idx]
+    batch = record["batch"]
+
+    if record.get("cancelled"):
+        st.warning(
+            "This batch was cancelled; only completed points are shown."
+        )
+
+    st.caption(
+        f"**{record['benchmark_name']}** | "
+        f"Algorithms: {', '.join(record['algos'])} | "
+        f"Runs/point: {record['runs']} | "
+        f"Seed: {batch.experiment_seed}"
+    )
+
+    for pr in batch.params:
+        st.subheader(f"`{pr.param}` — {pr.algorithm}")
+
+        rows = []
+        for p in pr.points:
+            rows.append({
+                "Value": _format_sweep_value(p.value),
+                "Status": p.status,
+                "Best": _fmt_cost(p.best_score),
+                "Mean": _fmt_cost(p.mean_score),
+                "Std": _fmt_cost(p.std_score),
+                "Feasible %": f"{p.feasible_pct:.0f}%",
+                "Time (s)": f"{p.mean_time:.1f}",
+            })
+        st.dataframe(pd.DataFrame(rows), width="stretch",
+                     hide_index=True)
+
+        notes, is_flat = _annotations_for_param(pr, batch.n_runs)
+        for note in notes:
+            st.caption(f"• {note}")
+
+        if is_flat:
+            st.warning(
+                "No recommendation — parameter has no measurable "
+                "effect on this benchmark."
+            )
+        elif pr.recommended_value is not None:
+            st.success(
+                f"Recommended: `{pr.param} = "
+                f"{_format_sweep_value(pr.recommended_value)}` "
+                f"(mean {_fmt_cost(pr.recommended_mean)})"
+            )
+        elif pr.reason:
+            st.caption(f"Note: {pr.reason}")
+
+    st.divider()
+    c1, c2 = st.columns(2)
+    md = batch_report_markdown(
+        batch, benchmark_name=record["benchmark_name"],
+    )
+    safe_ts = record["timestamp"].replace(":", "-")
+    with c1:
+        st.download_button(
+            "⬇ Download markdown",
+            data=md.encode("utf-8"),
+            file_name=f"sensitivity_{safe_ts}.md",
+            mime="text/markdown",
+            width="stretch",
+        )
+    with c2:
+        st.download_button(
+            "⬇ Download CSV",
+            data=batch_report_csv(batch),
+            file_name=f"sensitivity_{safe_ts}.csv",
+            mime="text/csv",
+            width="stretch",
+        )
 
 def _entry_from_sidebar(name: str) -> HistoryEntry:
     """Build a HistoryEntry (Draft, no result) from current sidebar.
@@ -1402,7 +1865,7 @@ def _render_history_section() -> None:
             _render_one_history_row(data)
         else:
             gid, entries = data
-            _render_sweep_history_row(gid, entries)
+            _render_sensitivity_group_row(gid, entries)
 
 
 def _render_one_history_row(entry: HistoryEntry) -> None:
@@ -1511,25 +1974,29 @@ def _render_one_history_row(entry: HistoryEntry) -> None:
                 st.session_state.history_delete_id = None
                 st.rerun()
 
-def _render_sweep_history_row(
+def _render_sensitivity_group_row(
     group_id: str, entries: list["HistoryEntry"],
 ) -> None:
-    """Render a collapsed row for a whole sweep group."""
-    param = "?"
-    if entries and entries[0].sweep_meta:
-        param = entries[0].sweep_meta.get("param", "?")
+    """Render a collapsed row for a sweep/batch group.
+
+    Handles both:
+    - single-parameter sweeps (all entries share one param),
+    - sensitivity batches (multiple params in one group).
+    """
+    params = set()
+    for e in entries:
+        if e.sweep_meta and e.sweep_meta.get("param"):
+            params.add(e.sweep_meta["param"])
 
     n_points = len(entries)
     best_cost = float("inf")
     best_value = None
-    n_feasible = 0
     for e in entries:
         if e.experiment is None:
             continue
         for runs in e.experiment.runs.values():
             for r in runs:
                 if r.status in ("Success", "Partial") and r.feasible:
-                    n_feasible += 1
                     if r.score < best_cost:
                         best_cost = r.score
                         best_value = (
@@ -1537,27 +2004,26 @@ def _render_sweep_history_row(
                             if e.sweep_meta else None
                         )
 
+    if len(params) == 1:
+        label = f"🔬 Sweep: {next(iter(params))}"
+    else:
+        label = f"🔬 Sensitivity batch: {len(params)} parameter(s)"
+
     if np.isfinite(best_cost):
         summary = (
-            f"\U0001F52C Sweep: {param} \u00b7 {n_points} points "
-            f"\u00b7 best ${best_cost:,.0f}"
+            f"{label} · {n_points} points · best ${best_cost:,.0f}"
             + (f" at {_format_sweep_value(best_value)}"
                if best_value is not None else "")
         )
     else:
-        summary = (
-            f"\U0001F52C Sweep: {param} \u00b7 {n_points} points "
-            f"\u00b7 no feasible result"
-        )
+        summary = f"{label} · {n_points} points · no feasible"
 
     with st.expander(summary, expanded=False):
         c_del, c_hint = st.columns([1, 3])
         with c_del:
-            if st.button(
-                "\U0001F5D1 Delete sweep",
-                key=f"sweep_del_{group_id}",
-                width="stretch",
-            ):
+            if st.button("🗑 Delete group",
+                         key=f"sens_del_{group_id}",
+                         width="stretch"):
                 st.session_state.history = [
                     e for e in st.session_state.history
                     if e.sweep_group_id != group_id
@@ -1565,11 +2031,9 @@ def _render_sweep_history_row(
                 st.rerun()
         with c_hint:
             st.caption(
-                "Open the Sweep tab to see the trend chart and the "
-                "statistical test.  Below, each point can be loaded "
-                "individually."
+                "Open the Sensitivity tab to see the report and "
+                "download it.  Individual points can be loaded here."
             )
-
         for e in entries:
             _render_one_history_row(e)
 
@@ -1895,81 +2359,6 @@ def _start_run(algo_label: str, run_name: str = ""):
     st.session_state.job_notice = None
     st.rerun()      # redraw sidebar: green button -> red "Cancel"
 
-
-def _start_sweep(param_name, values, algorithms, n_runs):
-    _sync_sidebar_state(with_n_runs=False)
-
-    from wds_optimizer.sensitivity.config import (
-        build_sensitivity_parameters, normalize_param_name,
-    )
-    norm = normalize_param_name(param_name)
-    catalog = build_sensitivity_parameters()
-
-    if norm not in catalog:
-        raise ValueError(
-            f"Unknown sweep parameter {param_name!r}."
-        )
-
-    # If the parameter belongs to a specific algorithm, ensure that
-    # algorithm is in the sweep's algorithm list.
-    info = catalog[norm]
-    if info.get("algorithm") and info["algorithm"] not in algorithms:
-        raise ValueError(
-            f"{info['label']} only affects {info['algorithm']}; "
-            f"add {info['algorithm']} to the sweep's Algorithms."
-        )
-
-    if not algorithms:
-        raise ValueError("Select at least one algorithm for the sweep.")
-
-    problem, units, wn = _prepare_problem()
-    base_cfg = _build_base_cfg()
-    seed = int(st.session_state.exp_seed)
-    label = _sweep_param_label(param_name, units)
-
-    import copy as _copy
-    entry_context = {
-        "inp_path": st.session_state.get("inp_path", ""),
-        "d_path": st.session_state.get("d_path", ""),
-        "cost_path": st.session_state.get("cost_path", ""),
-        "diam_unit": str(st.session_state.get("diam_unit_input", "mm")),
-        "constraints": _copy.deepcopy(problem["Constraints"]),
-        "units": _copy.deepcopy(units),
-        "algorithm_params": _algorithm_params_from_sidebar(
-            list(algorithms)
-        ),
-        "constraint_policy": str(base_cfg.constraint_policy),
-        "fixed_pipes": str(st.session_state.get("fixed_pipes_input", "")),
-    }
-
-    def target(progress_cb, cancel_cb):
-        return run_single_sweep(
-            problem, base_cfg,
-            parameter_name=param_name,
-            values=values,
-            algorithms=algorithms,
-            n_runs=int(n_runs),
-            experiment_seed=seed,
-            progress_callback=progress_cb,
-            cancel_callback=cancel_cb,
-        )
-
-    job = BackgroundJob(
-        "sweep", label=f"Sweep: {label}",
-        context={"param_name": param_name, "values": list(values),
-                 "algorithms": list(algorithms), "n_runs": int(n_runs),
-                 "entry_context": entry_context,
-                 "summary": (f"Sweeping **{label}** over **{len(values)}** "
-                             f"values: `{list(values)}` | Algorithms: "
-                             f"**{', '.join(algorithms)}**, runs/point: "
-                             f"**{n_runs}**, seed: **{seed}**")},
-    )
-    job.start(target)
-    st.session_state.job = job
-    st.session_state.job_notice = None
-    st.rerun()
-
-
 @st.fragment(run_every=0.5)
 def _job_panel():
     """Live progress while a job runs; finalises it when the thread ends."""
@@ -1981,9 +2370,9 @@ def _job_panel():
     if job.is_done:
         if job.kind == "run":
             _finalize_run(job)
-        else:
-            _finalize_sweep(job)
-        return                        # (finalize ends with st.rerun)
+        elif job.kind == "sensitivity":
+            _finalize_sensitivity(job)
+        return
 
     ctx = job.context
     prog = job.get_progress()
@@ -2037,31 +2426,31 @@ def _job_panel():
         )
         st.plotly_chart(fig, width="stretch")
 
-    else:  # sweep
-        total = prog.get("TotalPoints", len(ctx["values"]))
-        pi = prog.get("PointIndex", 1)
-        inner = prog.get("ProgressInfo") or {}
-        frac_in_point = 0.0
-        if inner.get("Generation"):
-            n_alg = max(len(ctx["algorithms"]), 1)
-            a_idx = (ctx["algorithms"].index(inner["Algorithm"])
-                     if inner.get("Algorithm") in ctx["algorithms"] else 0)
-            gen_frac = inner["Generation"] / max(inner["MaxGenerations"], 1)
-            frac_in_point = (
-                a_idx * ctx["n_runs"] + (inner.get("RunIndex", 1) - 1)
-                + gen_frac
-            ) / (n_alg * ctx["n_runs"])
-        if prog.get("Phase") == "PointDone":
-            frac_in_point = 1.0
-        st.progress(min(1.0, ((pi - 1) + frac_in_point) / max(total, 1)))
-        if "ParameterValue" in prog:
-            st.info(
-                f"Point **{pi}/{total}** | {ctx['param_name']} = "
-                f"**{_format_sweep_value(prog['ParameterValue'])}** | "
-                f"elapsed {job.elapsed:.0f} s"
-            )
-        else:
+    elif job.kind == "sensitivity":
+        if "Phase" not in prog:
+            st.progress(0.0)
             st.caption("Starting…")
+            return
+        phase = prog.get("Phase")
+        pi = prog.get("PointIndex", 1)
+        total = prog.get("TotalPoints", 1)
+        frac = min(1.0, pi / max(1, total))
+        st.progress(frac)
+        if phase == "PointDone":
+            st.info(
+                f"Point **{pi}/{total}** | "
+                f"{prog.get('ParameterName', '?')} = "
+                f"**{_format_sweep_value(prog.get('ParameterValue'))}**"
+                f" | elapsed {job.elapsed:.0f} s"
+            )
+        elif phase == "ParamDone":
+            st.info(
+                f"Finished parameter "
+                f"{prog.get('ParamIndex', '?')}/"
+                f"{prog.get('ParamTotal', '?')} "
+                f"({prog.get('ParameterName', '?')})"
+                f" | elapsed {job.elapsed:.0f} s"
+            )
 
 
 def _notice(level: str, msg: str, details: str = ""):
@@ -2175,40 +2564,6 @@ def _finalize_run(job: BackgroundJob):
         print(f"[finalize_run] history append failed: {e}")
 
     st.rerun()
-
-
-def _finalize_sweep(job: BackgroundJob):
-    st.session_state.job = None
-
-    if job.error is not None:
-        _notice("error",
-                f"Sweep failed: {type(job.error).__name__}: {job.error}",
-                job.error_trace)
-        st.rerun()
-
-    result = job.result
-    n_pts, n_all = len(result.points), len(result.values)
-    if n_pts:
-        st.session_state.sweep_result = result
-        entry_ctx = job.context.get("entry_context")
-        if entry_ctx:
-            try:
-                _create_sweep_history_entries(result, entry_ctx)
-            except Exception as e:
-                print(f"[finalize_sweep] history append failed: {e}")
-        st.session_state._clear_run_name = True
-    if result.cancelled:
-        if n_pts:
-            _notice("warning",
-                    f"Sweep cancelled after {job.elapsed:.0f} s — "
-                    f"{n_pts} of {n_all} points kept (see the Sweep tab).")
-        else:
-            _notice("warning", "Sweep cancelled before any point finished.")
-    else:
-        _notice("success", f"Sweep complete ({n_pts} points, "
-                           f"{job.elapsed:.1f} s). See the Sweep tab.")
-    st.rerun()
-
 
 def _show_job_notice():
     notice = st.session_state.get("job_notice")
@@ -2398,132 +2753,6 @@ def _restore_from_snapshot(data: dict):
         st.session_state.only_feasible = bool(saved_ui["only_feasible"])
 
     st.rerun()
-
-def _render_sweep_tab():
-    result = st.session_state.get("sweep_result")
-    if result is None:
-        st.info("Configure and run a sweep from the sidebar (section 6).")
-        return
-
-    units = st.session_state.get("network_units") or {}
-    st.subheader(f"Sweep: {_sweep_param_label(result.parameter, units)}")
-    st.caption(
-        f"Algorithms: {', '.join(result.algorithms)} | "
-        f"runs/point: {result.n_runs} | seed: {result.experiment_seed}"
-    )
-
-    # Dynamic value column header: include units when relevant.
-    # Handles both old-style parameter names (Pmin/Vmax) and v0.6
-    # namespaced names (Pmin, Pmax, Vmin, Vmax, NS, MaxGen, seed,
-    # constraint_policy, GA.ga_pc, plugin params).
-    _param_short = result.parameter.split(".")[-1]
-    if _param_short in ("Pmin", "Pmax"):
-        value_header = f"{_param_short} ({units.get('PressureUnit', 'm')})"
-    elif _param_short in ("Vmin", "Vmax"):
-        value_header = f"{_param_short} ({units.get('VelocityUnit', 'm/s')})"
-    else:
-        value_header = _param_short
-
-    if getattr(result, "cancelled", False):
-        st.warning(
-            f"Sweep cancelled: {len(result.points)} of "
-            f"{len(result.values)} points were reached. Points marked "
-            "“Partial” used fewer runs than requested."
-        )
-
-    rows = []
-    for p in result.points:
-        rows.append({
-            value_header:     _format_sweep_value(p.value),
-            "Status":         p.status,
-            "Best (feasible)": (
-                f"{p.best_score:,.0f}" if np.isfinite(p.best_score) else "—"
-            ),
-            "Mean cost": (
-                f"{p.mean_score:,.0f}" if np.isfinite(p.mean_score) else "—"
-            ),
-            "Std":            f"{p.std_score:,.0f}",
-            "Feasible %":     f"{p.feasible_pct:.0f}%",
-            "Mean time (s)":  f"{p.mean_time:.1f}",
-        })
-    df = pd.DataFrame(rows)
-    st.dataframe(df, width="stretch", hide_index=True)
-
-    # Trend chart (complete points only; partial ones are in the table)
-    plot_pts = [p for p in result.points
-                if p.status in ("Success", "AllInfeasible")]
-    if not plot_pts:
-        st.info("No completed sweep points to plot.")
-        _render_sweep_stats(result)
-        return
-
-    # Determine whether the swept parameter is numeric.  Numeric
-    # sweeps (Pc, NS, Pmin, ...) get a line chart with a continuous
-    # x-axis; categorical sweeps (constraint_policy, strategy, ...)
-    # get a bar chart — a line across categories would be misleading.
-    _is_numeric = all(
-        isinstance(p.value, (int, float)) and not isinstance(p.value, bool)
-        for p in plot_pts
-    )
-
-    xs = [_format_sweep_value(p.value) for p in plot_pts]
-    ys = [
-        p.mean_score if np.isfinite(p.mean_score) else np.nan
-        for p in plot_pts
-    ]
-    bests = [
-        p.best_score if np.isfinite(p.best_score) else np.nan
-        for p in plot_pts
-    ]
-
-    fig = go.Figure()
-    if _is_numeric:
-        fig.add_trace(go.Scatter(
-            x=[p.value for p in plot_pts], y=ys,
-            mode="lines+markers",
-            name="Mean cost", line=dict(color="#1971c2", width=2),
-        ))
-        fig.add_trace(go.Scatter(
-            x=[p.value for p in plot_pts], y=bests,
-            mode="lines+markers",
-            name="Best cost",
-            line=dict(color="#d9480f", width=2, dash="dash"),
-        ))
-    else:
-        fig.add_trace(go.Bar(
-            x=xs, y=ys, name="Mean cost",
-            marker_color="#1971c2",
-            text=[f"{v:,.0f}" if np.isfinite(v) else "—" for v in ys],
-            textposition="outside",
-        ))
-        fig.add_trace(go.Scatter(
-            x=xs, y=bests, mode="markers",
-            name="Best cost",
-            marker=dict(color="#d9480f", size=10, symbol="diamond"),
-        ))
-
-    fig.update_layout(
-        height=380,
-        xaxis_title=_sweep_param_label(result.parameter, units),
-        yaxis_title="Cost",
-        margin=dict(l=20, r=20, t=20, b=20),
-    )
-    st.plotly_chart(fig, width="stretch")
-
-    _render_sweep_stats(result)
-
-    # CSV export
-    csv = df.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        "⬇ Download sweep (CSV)",
-        data=csv,
-        file_name=(
-            f"wds_sweep_{result.parameter}_"
-            f"{datetime.now():%Y%m%d_%H%M%S}.csv"
-        ),
-        mime="text/csv",
-        width="stretch",
-    )
 
 def _render_compare_tab():
     st.subheader("Compare two experiments")
@@ -3246,55 +3475,6 @@ def _render_stat_compare(exp_a, exp_b):
         "Holm-adjusted across algorithms."
     )
 
-
-def _render_sweep_stats(result):
-    """Kruskal-Wallis + pairwise-vs-reference for a finished sweep."""
-    st.markdown("### Statistical test across sweep values")
-    pts = [p for p in result.points
-           if p.experiment is not None
-           and p.status in ("Success", "AllInfeasible")]
-    if len(pts) < 2:
-        st.info("At least two completed sweep points are needed.")
-        return
-    if result.n_runs < 5:
-        st.warning(
-            f"Only {result.n_runs} runs per point: tests cannot reach "
-            "significance with so few runs. Use ≥ 5 (ideally 20–30)."
-        )
-    labels = [_format_sweep_value(p.value) for p in pts]
-    for algo in result.algorithms:
-        groups = {
-            _format_sweep_value(p.value):
-                st_.feasible_costs(p.experiment.runs.get(algo, []))
-            for p in pts
-        }
-        ref_label = st.selectbox(
-            f"{algo}: reference value", labels, index=0,
-            key=f"sweep_ref_{algo}",
-        )
-        sa = st_.sweep_analysis(groups, ref_label)
-        kw = sa["kruskal"]
-        if np.isfinite(kw["p"]):
-            msg = (f"**{algo}** — Kruskal-Wallis across all values: "
-                   f"p = {st_.fmt_p(kw['p'])}"
-                   + (f" (H = {kw['H']:.2f})" if np.isfinite(kw["H"]) else "")
-                   + (" → the parameter has a significant effect."
-                      if kw["p"] < st_.ALPHA else
-                      " → no significant effect detected."))
-        else:
-            msg = f"**{algo}** — Kruskal-Wallis: {kw['note']}"
-        st.markdown(msg)
-        if sa["vs_reference"]:
-            _stats_table(st_.tests_dataframe(sa["vs_reference"]),
-                         "Comparison")
-            with st.expander(f"{algo}: interpretation"):
-                for r in sa["vs_reference"]:
-                    st.markdown(f"- {r['verdict']}")
-    st.caption(
-        "Pairwise Mann-Whitney tests against the chosen reference value, "
-        "Holm-adjusted. Only completed points are included."
-    )
-
 def _render_design_hydraulics_tab():
     """Inspect a single run: pipe diameters, velocities, node pressures.
 
@@ -3661,20 +3841,15 @@ def main():
 
     if actions["run_clicked"]:
         try:
-            _start_run(
-                actions["algo_label"],
-                run_name=st.session_state.get("run_name_input", ""),
-            )
+            _start_run(actions["algo_label"])
         except Exception as e:
             st.error(f"Could not start experiment: {type(e).__name__}: {e}")
             st.exception(e)
 
-    if actions["sweep"] is not None:
-        try:
-            _start_sweep(**actions["sweep"])
-        except Exception as e:
-            st.error(f"Could not start sweep: {type(e).__name__}: {e}")
-            st.exception(e)
+    # Sensitivity dialog (modal).  Shown only when the sidebar
+    # "Open sensitivity…" button set the flag.
+    if st.session_state.get("sensitivity_dialog_open"):
+        _sensitivity_dialog()
 
     _show_job_notice()
     if st.session_state.get("job") is not None:
@@ -3683,10 +3858,10 @@ def main():
     tabs = st.tabs([
         "📊 Summary",
         "📈 Statistics",
+        "🎯 Sensitivity",
         "🔎 Run Inspector",
         "🗺 Network Map",
         "📋 All Runs",
-        "🔍 Sweep",
         "🔄 Compare",
     ])
     with tabs[0]:
@@ -3694,13 +3869,13 @@ def main():
     with tabs[1]:
         _render_statistics_tab()
     with tabs[2]:
-        _render_design_hydraulics_tab()
+        _render_sensitivity_tab()
     with tabs[3]:
-        _render_map_tab()
+        _render_design_hydraulics_tab()
     with tabs[4]:
-        _render_all_runs_tab()
+        _render_map_tab()
     with tabs[5]:
-        _render_sweep_tab()
+        _render_all_runs_tab()
     with tabs[6]:
         _render_compare_tab()
 

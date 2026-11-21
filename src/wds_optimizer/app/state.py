@@ -25,7 +25,14 @@ _KEYS = {
     "node_pressures": None, "pipe_velocities": None,
     "hydraulics_converged": False,
     "problem_snapshot": None,
-    "sweep_result":  None,
+    # Sensitivity analysis (v0.8.2)
+    "sensitivity_dialog_open": False,
+    "sensitivity_plan": None,        # lazy init on first dialog open
+    "sensitivity_algos": None,       # lazy init
+    "sensitivity_runs": 3,
+    "sensitivity_batches": [],       # list of {batch, benchmark_name,
+                                     #          timestamp, algos, runs,
+                                     #          cancelled}
     "compare_result": None,
     "report_zip":      None,
     "report_filename": None,

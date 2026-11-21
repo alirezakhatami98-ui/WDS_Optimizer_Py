@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Sensitivity analysis GUI (v0.8.2)
+- New "4. Sensitivity Analysis" section in the sidebar with a single
+  button that opens a modal dialog.
+- Dialog supports the Multi-OAT plan: add/edit/delete parameter rows,
+  enable/disable individually, reset to defaults, and run.
+- Each row has a checkbox, a parameter dropdown (labels from
+  `build_sensitivity_parameters()`), and a values text input.
+- Runs as a `BackgroundJob` (kind="sensitivity") with live progress.
+- New "🎯 Sensitivity" tab shows the latest batch's per-parameter
+  tables, annotations (flat-line / significance / high-variance /
+  timing anomaly / failures), and recommendations, with download
+  buttons for markdown and CSV.
+- Each point of a batch becomes a `HistoryEntry` with a shared
+  `sweep_group_id`, so the History panel groups them into a single
+  collapsible row (multi-parameter aware).
+
+### Changed
+- Sidebar reorder: Sensitivity Analysis (section 4) comes *before*
+  Experiment (section 5), reflecting that sensitivity analysis is
+  part of the workflow, not an optional extra.
+- Section numbers shifted: Experiment 4→5, Snapshot 5→6,
+  History 6→7.  Reproducibility Report stays at 8.
+
+### Removed
+- The old "7. Parameter Sweep" section and its "🔍 Sweep" tab.
+  Functionality is superseded by the new dialog + tab.  Single
+  parameter sweeps are just a one-row plan in the new dialog.
+- `_render_sweep_tab`, `_render_sweep_stats`, `_start_sweep`,
+  `_finalize_sweep`, `_sweep_param_label` from streamlit_app.py.
+- `sweep_result` and `sweep_*_input` session state keys.
+
+### Notes
+- Requires Streamlit ≥ 1.31 for `@st.dialog` (already in the
+  `[gui]` extra).
+- The new tab shows batches from the current session only.  Older
+  results are available via History (each point is an entry) or
+  via the markdown/CSV downloads.
+- Per-parameter statistical tests (Kruskal-Wallis) are not yet
+  restored in the new tab; they will be added in v0.8.3.
+
+### Added
+
 #### Sensitivity batch backend (v0.8.1)
 - `wds_optimizer/sensitivity/batch.py`:
   - `PlanRow`, `BatchPoint`, `BatchParamResult`, `BatchSweepResult`

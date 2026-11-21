@@ -28,13 +28,16 @@ def test_clear_results_button_removed(app_source):
 
 
 def test_section_headers_renamed(app_source):
-    assert "2. Constraints & Population" in app_source
-    assert "2. Hydraulics & Constraints" not in app_source
+    # Section numbers shift with each release; check the descriptive
+    # part of each header, not the number.
+    assert "Constraints & Population" in app_source
+    assert "Hydraulics & Constraints" not in app_source
 
-    assert "5. Snapshot (single experiment)" in app_source
+    assert "Sensitivity Analysis" in app_source    # new section
+    assert "Snapshot (single experiment)" in app_source
     assert '"5. Save / Load"' not in app_source
 
-    assert "6. History (all runs)" in app_source
+    assert "History (all runs)" in app_source
     assert '"6. History"' not in app_source
 
 
