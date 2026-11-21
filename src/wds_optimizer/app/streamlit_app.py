@@ -296,7 +296,12 @@ def _init_widget_state():
             st.session_state[widget_key] = default
 
 def _render_sidebar():
-    _init_widget_state()          # ← این خط اضافه شود
+    _init_widget_state()
+    # `busy` (is a job running?) is used by several sections —
+    # Sensitivity Analysis (4), Experiment (5), Save/Load, etc.
+    # Compute it once here, before any widget, so all sections see
+    # the same value.
+    busy = st.session_state.get("job") is not None
     with st.sidebar:
         st.header("1. Input Files")
 
@@ -596,7 +601,7 @@ def _render_sidebar():
 
         st.divider()
         can_run = bool(st.session_state.inp_path)
-        busy = st.session_state.get("job") is not None
+        # busy is computed at the top of _render_sidebar (v0.8.2).
         run_clicked = _job_button(
             "run", "🚀 Run Experiment", "⏹ Cancel experiment",
             enabled=can_run and bool(st.session_state.get("algo_input")),
