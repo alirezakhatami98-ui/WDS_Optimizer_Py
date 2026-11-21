@@ -177,29 +177,47 @@ DE_STRATEGIES = ("rand/1/bin", "best/1/bin", "current-to-best/1/bin")
 _BUTTON_CSS = """
 <style>
 /* Start buttons: green */
-.st-key-run_start button, .st-key-sweep_start button {
+.st-key-run_start button,
+.st-key-sweep_start button,
+.st-key-sensitivity_start button {
     background-color: #2f9e44 !important; border-color: #2b8a3e !important;
 }
-.st-key-run_start button:hover, .st-key-sweep_start button:hover {
+.st-key-run_start button:hover,
+.st-key-sweep_start button:hover,
+.st-key-sensitivity_start button:hover {
     background-color: #2b8a3e !important;
 }
 /* Cancel buttons: red */
-.st-key-run_stop button, .st-key-sweep_stop button {
+.st-key-run_stop button,
+.st-key-sweep_stop button,
+.st-key-sensitivity_stop button {
     background-color: #e03131 !important; border-color: #c92a2a !important;
 }
-.st-key-run_stop button:hover, .st-key-sweep_stop button:hover {
+.st-key-run_stop button:hover,
+.st-key-sweep_stop button:hover,
+.st-key-sensitivity_stop button:hover {
     background-color: #c92a2a !important;
 }
 /* "Stopping..." state: amber */
-.st-key-run_stopping button, .st-key-sweep_stopping button {
+.st-key-run_stopping button,
+.st-key-sweep_stopping button,
+.st-key-sensitivity_stopping button {
     background-color: #f08c00 !important; border-color: #e67700 !important;
 }
-.st-key-run_start button *, .st-key-sweep_start button *,
-.st-key-run_stop button *,  .st-key-sweep_stop button *,
-.st-key-run_stopping button *, .st-key-sweep_stopping button * {
+.st-key-run_start button *,
+.st-key-sweep_start button *,
+.st-key-sensitivity_start button *,
+.st-key-run_stop button *,
+.st-key-sweep_stop button *,
+.st-key-sensitivity_stop button *,
+.st-key-run_stopping button *,
+.st-key-sweep_stopping button *,
+.st-key-sensitivity_stopping button * {
     color: #ffffff !important;
 }
-.st-key-run_start button:disabled, .st-key-sweep_start button:disabled {
+.st-key-run_start button:disabled,
+.st-key-sweep_start button:disabled,
+.st-key-sensitivity_start button:disabled {
     background-color: #adb5bd !important; border-color: #adb5bd !important;
     opacity: 0.6;
 }
@@ -569,13 +587,19 @@ def _render_sidebar():
             "Opens a dialog to define a batch of parameter sweeps "
             "for the current network and algorithms."
         )
-        if st.button(
+        # When a sensitivity job is running, this same button becomes
+        # a red "Cancel" button (mirroring the Run button's behaviour).
+        _sens_clicked = _job_button(
+            "sensitivity",
             "📊 Open sensitivity analysis…",
-            width="stretch",
-            disabled=busy,
-        ):
+            "⏹ Cancel sensitivity",
+            enabled=bool(st.session_state.inp_path),
+        )
+        if _sens_clicked:
             st.session_state.sensitivity_dialog_open = True
-            st.rerun()  
+            st.rerun()
+        if not st.session_state.get("inp_path"):
+            st.caption("Load input files to enable.")
 
         # ---- 5. Experiment ----
         st.divider()
@@ -957,13 +981,28 @@ def _make_default_plan(algos: list[str]) -> list[dict]:
                 })
     return rows
 
+def _catalog_for_algos(algos: list[str]) -> dict[str, dict]:
+    """Return the sensitivity catalog filtered to global params plus
+    params owned by the selected algorithms.
 
-@st.dialog("Sensitivity Analysis")
+    Global params (NS, MaxGen, Pmin, ...) are always included.  An
+    algorithm param like ``"GA.ga_pc"`` is included only if ``"GA"``
+    is in ``algos``.
+    """
+    full = build_sensitivity_parameters()
+    return {
+        k: v for k, v in full.items()
+        if v.get("algorithm") is None or v["algorithm"] in algos
+    }
+
+@st.dialog("Sensitivity Analysis", width="large")
 def _sensitivity_dialog():
     """Multi-OAT sensitivity analysis dialog.
 
-    Renders a list of (parameter, values) rows with checkboxes,
-    allows add/delete/reset, and starts a batch job on Run.
+    Note on size: Streamlit dialogs are not user-resizable; ``width``
+    can be "small" | "large" | int (pixels).  We use "large" for
+    more space.  For truly full-page editing, the alternative is to
+    move this setup to a dedicated tab (planned for v0.8.4 if needed).
     """
     import uuid as _uuid
 
@@ -977,9 +1016,6 @@ def _sensitivity_dialog():
             st.session_state.get("algo_input", ["GA"])
         )
 
-    catalog = build_sensitivity_parameters()
-    catalog_keys = list(catalog.keys())
-
     # ---- Algorithm(s) ----
     algos = st.multiselect(
         "Algorithm(s) to analyze",
@@ -989,6 +1025,11 @@ def _sensitivity_dialog():
         default=st.session_state.sensitivity_algos,
     )
     st.session_state.sensitivity_algos = algos
+
+    # ---- Catalog: only globals + params of selected algorithms ----
+    full_catalog = build_sensitivity_parameters()
+    catalog = _catalog_for_algos(algos)
+    catalog_keys = list(catalog.keys())
 
     # ---- Runs per point ----
     runs = st.number_input(
@@ -1006,48 +1047,87 @@ def _sensitivity_dialog():
     to_delete = None
     for row in st.session_state.sensitivity_plan:
         rid = row["id"]
-        c1, c2, c3, c4 = st.columns([1, 3, 4, 1])
+        c1, c2, c3, c4 = st.columns([1, 3, 3, 1])
 
         en_key = f"sen_en_{rid}"
         par_key = f"sen_par_{rid}"
         val_key = f"sen_val_{rid}"
+
+        # Is this row's parameter still offered given the current
+        # algorithm selection?  Global params are always valid; an
+        # algorithm param is valid only when its algorithm is
+        # selected.
+        row_is_valid = row["param"] in catalog_keys
+
+        # ---- Checkbox ----
         if en_key not in st.session_state:
             st.session_state[en_key] = bool(row["enabled"])
-        if par_key not in st.session_state:
-            st.session_state[par_key] = row["param"]
-        if val_key not in st.session_state:
-            st.session_state[val_key] = row["values"]
-
+        if not row_is_valid:
+            # Force off.  This must run before st.checkbox is created.
+            st.session_state[en_key] = False
         with c1:
             row["enabled"] = st.checkbox(
-                "Enabled", key=en_key, label_visibility="collapsed",
-            )
-        with c2:
-            cur = st.session_state[par_key]
-            if cur not in catalog_keys:
-                cur = catalog_keys[0]
-                st.session_state[par_key] = cur
-            row["param"] = st.selectbox(
-                "Parameter", options=catalog_keys, key=par_key,
-                format_func=lambda k: catalog[k]["label"],
+                "Enabled", key=en_key,
                 label_visibility="collapsed",
+                disabled=not row_is_valid,
             )
+
+        # ---- Parameter dropdown (or read-only if invalid) ----
+        with c2:
+            if row_is_valid:
+                cur = st.session_state.get(par_key, catalog_keys[0])
+                if cur not in catalog_keys:
+                    cur = catalog_keys[0]
+                    st.session_state[par_key] = cur
+                row["param"] = st.selectbox(
+                    "Parameter", options=catalog_keys, key=par_key,
+                    format_func=lambda k: catalog[k]["label"],
+                    label_visibility="collapsed",
+                )
+            else:
+                old_label = full_catalog.get(
+                    row["param"], {},
+                ).get("label", row["param"])
+                st.text_input(
+                    "Parameter",
+                    value=f"{old_label}  (algorithm not selected)",
+                    key=f"sen_invalid_{rid}",
+                    disabled=True,
+                    label_visibility="collapsed",
+                )
+
+        # ---- Values ----
         with c3:
+            if val_key not in st.session_state:
+                st.session_state[val_key] = row["values"]
             row["values"] = st.text_input(
                 "Values", key=val_key,
                 placeholder="e.g. 0.6, 0.7, 0.8, 0.9",
+                disabled=not row_is_valid,
                 label_visibility="collapsed",
             )
+
+        # ---- Delete ----
         with c4:
             if st.button("🗑", key=f"sen_del_{rid}"):
                 to_delete = rid
 
-        # Contextual hint for choice params
-        info = catalog.get(row["param"], {})
-        if info.get("kind") == "choice" and info.get("choices"):
+        # ---- Hints / warnings ----
+        if not row_is_valid:
+            owner = full_catalog.get(
+                row["param"], {},
+            ).get("algorithm", "?")
             st.caption(
-                f"  ↳ Allowed: {', '.join(map(str, info['choices']))}"
+                f"  ⚠ Belongs to algorithm **{owner}**, which is not "
+                f"selected.  Re-add **{owner}** or delete this row."
             )
+        else:
+            info = catalog.get(row["param"], {})
+            if info.get("kind") == "choice" and info.get("choices"):
+                st.caption(
+                    f"  ↳ Allowed: "
+                    f"{', '.join(map(str, info['choices']))}"
+                )
 
     if to_delete:
         st.session_state.sensitivity_plan = [
@@ -1062,7 +1142,8 @@ def _sensitivity_dialog():
     # ---- Add / Reset ----
     c_add, c_reset = st.columns(2)
     with c_add:
-        if st.button("+ Add parameter", width="stretch"):
+        if st.button("+ Add parameter", width="stretch",
+                     disabled=not catalog_keys):
             new_id = _uuid.uuid4().hex
             default_param = catalog_keys[0]
             default_vals = "0.5, 0.7, 0.9"
@@ -1079,23 +1160,24 @@ def _sensitivity_dialog():
     with c_reset:
         if st.button("Reset to defaults", width="stretch"):
             st.session_state.sensitivity_plan = _make_default_plan(algos)
-            # Drop stale widget state
             for k in [k for k in list(st.session_state.keys())
                       if k.startswith("sen_")]:
                 st.session_state.pop(k, None)
             st.rerun()
 
-    # ---- Estimate ----
-    enabled_rows = [r for r in st.session_state.sensitivity_plan
-                    if r["enabled"]]
+    # ---- Estimate (count only enabled + valid rows) ----
+    valid_enabled = [
+        r for r in st.session_state.sensitivity_plan
+        if r["enabled"] and r["param"] in catalog_keys
+    ]
     n_values = 0
-    for r in enabled_rows:
+    for r in valid_enabled:
         try:
             n_values += len(parse_sensitivity_values(r["values"]))
         except ValueError:
             pass
     st.caption(
-        f"Total: {len(enabled_rows)} parameter(s) × ~{n_values} "
+        f"Total: {len(valid_enabled)} parameter(s) × ~{n_values} "
         f"value(s) × {runs} run(s) = ~{n_values * int(runs)} runs"
     )
 
@@ -1105,7 +1187,7 @@ def _sensitivity_dialog():
         if st.button("▶ Run batch", type="primary", width="stretch"):
             try:
                 _start_sensitivity_batch(
-                    plan_rows=enabled_rows,
+                    plan_rows=valid_enabled,
                     algos=algos,
                     runs=int(runs),
                 )
@@ -1123,6 +1205,10 @@ def _start_sensitivity_batch(*, plan_rows, algos, runs):
     """Validate and start a sensitivity batch as a background job."""
     import copy as _copy
 
+    if not st.session_state.get("inp_path"):
+        raise ValueError(
+            "Load input files before running a sensitivity batch."
+        )
     if not plan_rows:
         raise ValueError("No enabled parameters in the plan.")
     if not algos:
@@ -3851,9 +3937,13 @@ def main():
             st.error(f"Could not start experiment: {type(e).__name__}: {e}")
             st.exception(e)
 
-    # Sensitivity dialog (modal).  Shown only when the sidebar
-    # "Open sensitivity…" button set the flag.
+    # Sensitivity dialog (modal).  One-shot trigger: consume the flag
+    # before rendering the dialog so that ANY subsequent rerun (user
+    # changes an unrelated widget, dismisses the modal, etc.) does
+    # not reopen it.  The sidebar button re-sets the flag when the
+    # user explicitly wants it again.
     if st.session_state.get("sensitivity_dialog_open"):
+        st.session_state.sensitivity_dialog_open = False
         _sensitivity_dialog()
 
     _show_job_notice()

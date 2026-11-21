@@ -148,3 +148,28 @@ def test_diam_unit_widget_has_no_index(app_source):
         "diam_unit selectbox must not pass index=; "
         "seed st.session_state.diam_unit_input before the widget instead."
     )
+
+def test_sensitivity_button_uses_job_button(app_source):
+    """The Sensitivity Analysis button uses _job_button so it becomes
+    a Cancel button while a sensitivity job runs."""
+    assert '_job_button(\n            "sensitivity"' in app_source or \
+           '_job_button("sensitivity"' in app_source
+
+
+def test_sensitivity_dialog_is_one_shot(app_source):
+    """sensitivity_dialog_open must be consumed before the dialog is
+    rendered; otherwise it re-opens on any rerun (algorithm change,
+    etc.)."""
+    # Locate the "if sensitivity_dialog_open" block and verify the
+    # first statement inside it sets the flag to False.
+    import re
+    m = re.search(
+        r'if st\.session_state\.get\("sensitivity_dialog_open"\):\s*\n'
+        r'\s+st\.session_state\.sensitivity_dialog_open = False\s*\n'
+        r'\s+_sensitivity_dialog\(\)',
+        app_source,
+    )
+    assert m is not None, (
+        "sensitivity_dialog_open must be set to False BEFORE "
+        "_sensitivity_dialog() is called (one-shot trigger)."
+    )
