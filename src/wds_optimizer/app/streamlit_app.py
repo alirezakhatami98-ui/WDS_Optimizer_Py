@@ -1313,8 +1313,10 @@ def _start_sensitivity_batch(*, plan_rows, algos, runs):
     except ValueError as e:
         raise ValueError(str(e))
 
+    # Sync current sidebar widget values before building the problem.
+    _sync_sidebar_state(with_n_runs=False)
     problem, units, wn = _prepare_problem()
-    base_cfg = _build_base_cfg()
+    base_cfg = _build_base_cfg(selected_algos=algos)
     seed = int(st.session_state.exp_seed)
 
     entry_context = {
@@ -2416,7 +2418,7 @@ def _apply_param_to_config(
         cfg.extra.setdefault(short_id, {})[param_meta["key"]] = value
 
 
-def _build_base_cfg():
+def _build_base_cfg(selected_algos=None):
     cfg = build_algorithm_config(
         int(st.session_state.ns), int(st.session_state.max_gen)
     )
@@ -2425,7 +2427,11 @@ def _build_base_cfg():
     )
 
     # Populate each selected algorithm's params from session_state.
-    selected = st.session_state.get("algo_input", [])
+    selected = (
+        list(selected_algos)
+        if selected_algos is not None
+        else st.session_state.get("algo_input", [])
+    )
     for short_id in selected:
         entry = ALGORITHM_REGISTRY.get(short_id)
         if entry is None:

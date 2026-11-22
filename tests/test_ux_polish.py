@@ -220,3 +220,34 @@ def test_sensitivity_plan_edits_use_callbacks(app_source):
 
     # The two remaining full-app reruns belong to Run and Cancel.
     assert dialog.count("st.rerun()") == 2
+
+def test_sensitivity_syncs_sidebar_before_building_problem(app_source):
+    """Sensitivity must use the current sidebar values, not stale
+    canonical session-state values."""
+    import re
+
+    match = re.search(
+        r"^def _start_sensitivity_batch\(.*?"
+        r"(?=^def _finalize_sensitivity)",
+        app_source,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert match is not None
+    source = match.group(0)
+
+    sync_pos = source.find(
+        "_sync_sidebar_state(with_n_runs=False)"
+    )
+    prepare_pos = source.find("_prepare_problem()")
+
+    assert sync_pos >= 0
+    assert prepare_pos >= 0
+    assert sync_pos < prepare_pos
+
+
+def test_sensitivity_builds_config_for_selected_algorithms(app_source):
+    """The sensitivity dialog algorithm selection must drive the
+    base algorithm configuration."""
+    assert "def _build_base_cfg(selected_algos=None):" in app_source
+    assert "base_cfg = _build_base_cfg(selected_algos=algos)" in app_source
+    assert "list(selected_algos)" in app_source
