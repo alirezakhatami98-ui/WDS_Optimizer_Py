@@ -173,3 +173,46 @@ def test_sensitivity_dialog_is_one_shot(app_source):
         "sensitivity_dialog_open must be set to False BEFORE "
         "_sensitivity_dialog() is called (one-shot trigger)."
     )
+
+def test_sensitivity_parameter_defaults_to_its_own_plan_row(app_source):
+    """Each parameter widget must initialize from its own plan row."""
+    assert 'st.session_state[par_key] = row["param"]' in app_source
+    assert 'st.session_state.get(par_key, catalog_keys[0])' not in app_source
+
+
+def test_sensitivity_parameter_options_exclude_other_rows(app_source):
+    """A parameter selected in one row must not be offered in another."""
+    assert "used_by_other_rows = {" in app_source
+    assert 'other["id"] != rid' in app_source
+    assert "row_catalog_keys = [" in app_source
+    assert "options=row_catalog_keys" in app_source
+
+
+def test_sensitivity_add_uses_only_available_parameters(app_source):
+    """Add must use an unused parameter and disable when none remain."""
+    assert "selected_params = {" in app_source
+    assert "available_params = [" in app_source
+    assert "disabled=not available_params" in app_source
+    assert "default_param = available_params[0]" in app_source
+
+
+def test_sensitivity_dialog_stays_open_after_plan_edits(app_source):
+    """Add, Reset and Delete must preserve the dialog across reruns."""
+    import re
+
+    dialog_match = re.search(
+        r"@st\.dialog\(\"Sensitivity Analysis\".*?"
+        r"(?=^def _start_sensitivity_batch)",
+        app_source,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert dialog_match is not None
+    dialog = dialog_match.group(0)
+
+    # All three edit operations must restore the one-shot trigger
+    # before requesting a rerun.
+    assert dialog.count(
+        "st.session_state.sensitivity_dialog_open = True"
+    ) >= 3
+
+    assert dialog.count("st.rerun()") >= 3

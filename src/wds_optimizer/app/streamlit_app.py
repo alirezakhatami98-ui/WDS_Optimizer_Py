@@ -1075,12 +1075,39 @@ def _sensitivity_dialog():
         # ---- Parameter dropdown (or read-only if invalid) ----
         with c2:
             if row_is_valid:
-                cur = st.session_state.get(par_key, catalog_keys[0])
-                if cur not in catalog_keys:
-                    cur = catalog_keys[0]
+                # A parameter may be selected only once across the
+                # entire plan. Keep this row's current parameter
+                # available, but hide parameters used by other rows.
+                used_by_other_rows = {
+                    other["param"]
+                    for other in st.session_state.sensitivity_plan
+                    if other["id"] != rid
+                    and other["param"] in catalog_keys
+                }
+                row_catalog_keys = [
+                    key for key in catalog_keys
+                    if key not in used_by_other_rows
+                    or key == row["param"]
+                ]
+
+                # Initialize this widget from its own plan row,
+                # not from the first item in the global catalog.
+                if par_key not in st.session_state:
+                    st.session_state[par_key] = row["param"]
+
+                cur = st.session_state[par_key]
+                if cur not in row_catalog_keys:
+                    cur = (
+                        row["param"]
+                        if row["param"] in row_catalog_keys
+                        else row_catalog_keys[0]
+                    )
                     st.session_state[par_key] = cur
+
                 row["param"] = st.selectbox(
-                    "Parameter", options=catalog_keys, key=par_key,
+                    "Parameter",
+                    options=row_catalog_keys,
+                    key=par_key,
                     format_func=lambda k: catalog[k]["label"],
                     label_visibility="collapsed",
                 )
@@ -1137,15 +1164,30 @@ def _sensitivity_dialog():
         for k in (f"sen_en_{to_delete}", f"sen_par_{to_delete}",
                   f"sen_val_{to_delete}"):
             st.session_state.pop(k, None)
+
+        st.session_state.sensitivity_dialog_open = True
         st.rerun()
 
     # ---- Add / Reset ----
+    selected_params = {
+        r["param"]
+        for r in st.session_state.sensitivity_plan
+        if r["param"] in catalog_keys
+    }
+    available_params = [
+        key for key in catalog_keys
+        if key not in selected_params
+    ]
+
     c_add, c_reset = st.columns(2)
     with c_add:
-        if st.button("+ Add parameter", width="stretch",
-                     disabled=not catalog_keys):
+        if st.button(
+            "+ Add parameter",
+            width="stretch",
+            disabled=not available_params,
+        ):
             new_id = _uuid.uuid4().hex
-            default_param = catalog_keys[0]
+            default_param = available_params[0]
             default_vals = "0.5, 0.7, 0.9"
             st.session_state[f"sen_en_{new_id}"] = True
             st.session_state[f"sen_par_{new_id}"] = default_param
@@ -1156,6 +1198,7 @@ def _sensitivity_dialog():
                 "values": default_vals,
                 "enabled": True,
             })
+            st.session_state.sensitivity_dialog_open = True
             st.rerun()
     with c_reset:
         if st.button("Reset to defaults", width="stretch"):
@@ -1163,6 +1206,8 @@ def _sensitivity_dialog():
             for k in [k for k in list(st.session_state.keys())
                       if k.startswith("sen_")]:
                 st.session_state.pop(k, None)
+
+            st.session_state.sensitivity_dialog_open = True
             st.rerun()
 
     # ---- Estimate (count only enabled + valid rows) ----
