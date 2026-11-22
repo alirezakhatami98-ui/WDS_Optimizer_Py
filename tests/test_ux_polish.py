@@ -277,3 +277,20 @@ def test_latest_sensitivity_batch_is_selected_after_finalize(app_source):
     assert append_pos >= 0
     assert save_pos > append_pos
     assert select_pos > save_pos
+
+def test_sensitivity_batch_selector_uses_session_state_only(app_source):
+    """The batch selector must not combine index with Session State."""
+    import re
+
+    match = re.search(
+        r"^def _render_sensitivity_tab\(.*?"
+        r"(?=^def |\Z)",
+        app_source,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert match is not None
+    source = match.group(0)
+
+    assert 'key="sensitivity_batch_selector"' in source
+    assert "index=len(batches) - 1" not in source
+    assert "st.session_state.sensitivity_batch_selector = len(batches) - 1" in source

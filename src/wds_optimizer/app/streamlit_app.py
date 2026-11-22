@@ -1524,10 +1524,19 @@ def _render_sensitivity_tab():
         f"({b['timestamp']})"
         for i, b in enumerate(batches)
     ]
+    # Initialize or validate the selected batch before creating the widget.
+    current_idx = st.session_state.get("sensitivity_batch_selector")
+
+    if (
+        not isinstance(current_idx, int)
+        or current_idx < 0
+        or current_idx >= len(batches)
+    ):
+        st.session_state.sensitivity_batch_selector = len(batches) - 1
+
     idx = st.selectbox(
         "Batch", range(len(batches)),
         format_func=lambda i: labels[i],
-        index=len(batches) - 1,
         key="sensitivity_batch_selector",
     )
     record = batches[idx]
