@@ -1045,6 +1045,17 @@ def _sensitivity_dialog():
     st.markdown("**Plan**")
 
     to_delete = None
+    def _delete_sensitivity_row(row_id):
+        st.session_state.sensitivity_plan = [
+            r for r in st.session_state.sensitivity_plan
+            if r["id"] != row_id
+        ]
+        for k in (
+            f"sen_en_{row_id}",
+            f"sen_par_{row_id}",
+            f"sen_val_{row_id}",
+        ):
+            st.session_state.pop(k, None)
     for row in st.session_state.sensitivity_plan:
         rid = row["id"]
         c1, c2, c3, c4 = st.columns([1, 3, 3, 1])
@@ -1136,8 +1147,12 @@ def _sensitivity_dialog():
 
         # ---- Delete ----
         with c4:
-            if st.button("🗑", key=f"sen_del_{rid}"):
-                to_delete = rid
+            st.button(
+                "🗑",
+                key=f"sen_del_{rid}",
+                on_click=_delete_sensitivity_row,
+                args=(rid,),
+            )
 
         # ---- Hints / warnings ----
         if not row_is_valid:
@@ -1156,19 +1171,6 @@ def _sensitivity_dialog():
                     f"{', '.join(map(str, info['choices']))}"
                 )
 
-    if to_delete:
-        st.session_state.sensitivity_plan = [
-            r for r in st.session_state.sensitivity_plan
-            if r["id"] != to_delete
-        ]
-        for k in (f"sen_en_{to_delete}", f"sen_par_{to_delete}",
-                  f"sen_val_{to_delete}"):
-            st.session_state.pop(k, None)
-
-        st.session_state.sensitivity_dialog_open = True
-        st.rerun()
-
-    # ---- Add / Reset ----
     selected_params = {
         r["param"]
         for r in st.session_state.sensitivity_plan
@@ -1179,36 +1181,51 @@ def _sensitivity_dialog():
         if key not in selected_params
     ]
 
+    def _add_sensitivity_parameter():
+        if not available_params:
+            return
+
+        new_id = _uuid.uuid4().hex
+        default_param = available_params[0]
+        default_vals = "0.5, 0.7, 0.9"
+
+        st.session_state[f"sen_en_{new_id}"] = True
+        st.session_state[f"sen_par_{new_id}"] = default_param
+        st.session_state[f"sen_val_{new_id}"] = default_vals
+
+        st.session_state.sensitivity_plan.append({
+            "id": new_id,
+            "param": default_param,
+            "values": default_vals,
+            "enabled": True,
+        })
+
+    def _reset_sensitivity_plan():
+        st.session_state.sensitivity_plan = _make_default_plan(algos)
+
+        for k in [
+            k for k in list(st.session_state.keys())
+            if k.startswith("sen_")
+        ]:
+            st.session_state.pop(k, None)
+
+    # ---- Add / Reset ----
     c_add, c_reset = st.columns(2)
+
     with c_add:
-        if st.button(
+        st.button(
             "+ Add parameter",
             width="stretch",
             disabled=not available_params,
-        ):
-            new_id = _uuid.uuid4().hex
-            default_param = available_params[0]
-            default_vals = "0.5, 0.7, 0.9"
-            st.session_state[f"sen_en_{new_id}"] = True
-            st.session_state[f"sen_par_{new_id}"] = default_param
-            st.session_state[f"sen_val_{new_id}"] = default_vals
-            st.session_state.sensitivity_plan.append({
-                "id": new_id,
-                "param": default_param,
-                "values": default_vals,
-                "enabled": True,
-            })
-            st.session_state.sensitivity_dialog_open = True
-            st.rerun()
-    with c_reset:
-        if st.button("Reset to defaults", width="stretch"):
-            st.session_state.sensitivity_plan = _make_default_plan(algos)
-            for k in [k for k in list(st.session_state.keys())
-                      if k.startswith("sen_")]:
-                st.session_state.pop(k, None)
+            on_click=_add_sensitivity_parameter,
+        )
 
-            st.session_state.sensitivity_dialog_open = True
-            st.rerun()
+    with c_reset:
+        st.button(
+            "Reset to defaults",
+            width="stretch",
+            on_click=_reset_sensitivity_plan,
+        )
 
     # ---- Estimate (count only enabled + valid rows) ----
     valid_enabled = [

@@ -196,12 +196,13 @@ def test_sensitivity_add_uses_only_available_parameters(app_source):
     assert "default_param = available_params[0]" in app_source
 
 
-def test_sensitivity_dialog_stays_open_after_plan_edits(app_source):
-    """Add, Reset and Delete must preserve the dialog across reruns."""
+def test_sensitivity_plan_edits_use_callbacks(app_source):
+    """Add, Reset and Delete must use callbacks so only the dialog
+    fragment reruns automatically."""
     import re
 
     dialog_match = re.search(
-        r"@st\.dialog\(\"Sensitivity Analysis\".*?"
+        r'@st\.dialog\("Sensitivity Analysis".*?'
         r"(?=^def _start_sensitivity_batch)",
         app_source,
         re.DOTALL | re.MULTILINE,
@@ -209,10 +210,13 @@ def test_sensitivity_dialog_stays_open_after_plan_edits(app_source):
     assert dialog_match is not None
     dialog = dialog_match.group(0)
 
-    # All three edit operations must restore the one-shot trigger
-    # before requesting a rerun.
-    assert dialog.count(
-        "st.session_state.sensitivity_dialog_open = True"
-    ) >= 3
+    # Each plan-edit operation must use a callback.
+    assert "on_click=_delete_sensitivity_row" in dialog
+    assert "on_click=_add_sensitivity_parameter" in dialog
+    assert "on_click=_reset_sensitivity_plan" in dialog
 
-    assert dialog.count("st.rerun()") >= 3
+    # Plan edits must not force a full-app rerun or reopen the dialog.
+    assert "st.session_state.sensitivity_dialog_open = True" not in dialog
+
+    # The two remaining full-app reruns belong to Run and Cancel.
+    assert dialog.count("st.rerun()") == 2
