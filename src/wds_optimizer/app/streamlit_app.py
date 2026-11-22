@@ -1390,6 +1390,9 @@ def _finalize_sensitivity(job: BackgroundJob):
     batches.append(record)
     st.session_state.sensitivity_batches = batches
 
+    # Automatically select the batch that just finished.
+    st.session_state.sensitivity_batch_selector = len(batches) - 1
+
     try:
         _create_sensitivity_history_entries(
             result, ctx["entry_context"], len(batches) - 1,

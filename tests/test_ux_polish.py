@@ -251,3 +251,29 @@ def test_sensitivity_builds_config_for_selected_algorithms(app_source):
     assert "def _build_base_cfg(selected_algos=None):" in app_source
     assert "base_cfg = _build_base_cfg(selected_algos=algos)" in app_source
     assert "list(selected_algos)" in app_source
+
+def test_latest_sensitivity_batch_is_selected_after_finalize(app_source):
+    """The newly completed sensitivity batch must become the
+    selected batch in the Sensitivity tab."""
+    import re
+
+    match = re.search(
+        r"^def _finalize_sensitivity\(.*?"
+        r"(?=^def _create_sensitivity_history_entries)",
+        app_source,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert match is not None
+    source = match.group(0)
+
+    append_pos = source.find("batches.append(record)")
+    save_pos = source.find(
+        "st.session_state.sensitivity_batches = batches"
+    )
+    select_pos = source.find(
+        "st.session_state.sensitivity_batch_selector = len(batches) - 1"
+    )
+
+    assert append_pos >= 0
+    assert save_pos > append_pos
+    assert select_pos > save_pos
