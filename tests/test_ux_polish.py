@@ -335,3 +335,22 @@ def test_sensitivity_default_plan_uses_catalog(app_source):
     source = match.group(0)
     assert "build_sensitivity_parameters()" in source
     assert 'info["default_values"]' in source
+
+def test_sensitivity_row_validator_exists(app_source):
+    assert "def _validate_sensitivity_row_values(param: str, raw: str)" in app_source
+
+
+def test_sensitivity_dialog_validates_enabled_rows(app_source):
+    assert 'invalid_rows = {}' in app_source
+    assert "_validate_sensitivity_row_values(" in app_source
+    assert "invalid_rows[rid] = str(exc)" in app_source
+
+
+def test_sensitivity_run_disabled_for_invalid_rows(app_source):
+    assert "disabled=bool(invalid_rows) or not valid_enabled" in app_source
+
+
+def test_sensitivity_validator_checks_parameter_ranges(app_source):
+    assert 'minimum = info.get("min")' in app_source
+    assert 'maximum = info.get("max")' in app_source
+    assert "math.isfinite(value)" in app_source

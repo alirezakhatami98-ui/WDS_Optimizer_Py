@@ -1009,6 +1009,64 @@ def _catalog_for_algos(algos: list[str]) -> dict[str, dict]:
         if v.get("algorithm") is None or v["algorithm"] in algos
     }
 
+def _validate_sensitivity_row_values(param: str, raw: str) -> list:
+    """Parse and validate values against the sensitivity parameter catalog."""
+    import math
+
+    catalog = build_sensitivity_parameters()
+    key = normalize_param_name(param)
+    info = catalog.get(key)
+
+    if info is None:
+        raise ValueError(f"Unknown parameter: {param}")
+
+    try:
+        values = parse_sensitivity_values(raw)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+
+    if not values:
+        raise ValueError("Select or enter at least one value.")
+
+    kind = info.get("kind")
+
+    for value in values:
+        if kind == "choice":
+            if value not in info.get("choices", []):
+                raise ValueError(
+                    f"{value!r} is not an allowed choice. "
+                    f"Allowed: {', '.join(map(str, info['choices']))}"
+                )
+
+        elif kind == "bool":
+            if not isinstance(value, bool):
+                raise ValueError("Only True and False are allowed.")
+
+        elif kind in ("int", "float"):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError("Only numeric values are allowed.")
+
+            if not math.isfinite(value):
+                raise ValueError("Values must be finite numbers.")
+
+            if kind == "int" and not float(value).is_integer():
+                raise ValueError("Only integer values are allowed.")
+
+            minimum = info.get("min")
+            maximum = info.get("max")
+
+            if minimum is not None and value < minimum:
+                raise ValueError(
+                    f"Value {value} is below the minimum ({minimum})."
+                )
+
+            if maximum is not None and value > maximum:
+                raise ValueError(
+                    f"Value {value} exceeds the maximum ({maximum})."
+                )
+
+    return values
+
 @st.dialog("Sensitivity Analysis", width="large")
 def _sensitivity_dialog():
     """Multi-OAT sensitivity analysis dialog.
@@ -1100,6 +1158,8 @@ def _sensitivity_dialog():
             st.session_state[f"sen_val_{row_id}"] = ", ".join(
                 map(str, info["default_values"])
             )
+
+    invalid_rows = {}
     for row in st.session_state.sensitivity_plan:
         rid = row["id"]
         c1, c2, c3, c4 = st.columns([1, 3, 3, 1])
@@ -1233,6 +1293,16 @@ def _sensitivity_dialog():
                     label_visibility="collapsed",
                 )
 
+        # ---- Validate row values ----
+        if row_is_valid and row["enabled"]:
+            try:
+                _validate_sensitivity_row_values(
+                    row["param"], row["values"]
+                )
+            except ValueError as exc:
+                invalid_rows[rid] = str(exc)
+                st.error(f"⚠ {exc}")
+        
         # ---- Delete ----
         with c4:
             st.button(
@@ -1342,7 +1412,12 @@ def _sensitivity_dialog():
     # ---- Actions ----
     c_run, c_cancel = st.columns(2)
     with c_run:
-        if st.button("▶ Run batch", type="primary", width="stretch"):
+        if st.button(
+            "▶ Run batch",
+            type="primary",
+            width="stretch",
+            disabled=bool(invalid_rows) or not valid_enabled,
+        ):
             try:
                 _start_sensitivity_batch(
                     plan_rows=valid_enabled,
