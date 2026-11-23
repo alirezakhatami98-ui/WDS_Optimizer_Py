@@ -106,36 +106,108 @@ _GLOBAL_PARAMS: dict[str, dict] = {
     },
 }
 
+_GLOBAL_DEFAULT_VALUES: dict[str, list] = {
+    "NS": [50, 100, 200],
+    "MaxGen": [100, 300, 500],
+    "n_runs": [1, 3, 5],
+    "seed": [1, 42, 123],
+    "constraint_policy": list(CONSTRAINT_POLICIES.keys()),
+    "Pmin": [20.0, 30.0, 40.0],
+    "Pmax": [60.0, 80.0, 100.0],
+    "Vmin": [0.0, 0.5, 1.0],
+    "Vmax": [1.5, 2.0, 2.5],
+}
+
+
+_ALGORITHM_DEFAULT_VALUES: dict[str, list] = {
+    "GA.ga_pc": [0.6, 0.8, 0.95],
+    "GA.ga_pm": [0.01, 0.03, 0.05],
+    "GA.ga_sel": ["tournament", "roulette"],
+
+    "PSO.pso_w": [0.4, 0.7, 0.9],
+    "PSO.pso_c1": [1.0, 1.5, 2.0],
+    "PSO.pso_c2": [1.0, 1.5, 2.0],
+
+    "DE.de_f": [0.3, 0.5, 0.8],
+    "DE.de_cr": [0.1, 0.3, 0.8],
+    "DE.de_strategy": [
+        "rand/1/bin",
+        "best/1/bin",
+        "current-to-best/1/bin",
+    ],
+
+    "SADE.sade_fmin": [0.05, 0.1, 0.2],
+    "SADE.sade_fmax": [0.7, 0.9, 1.1],
+    "SADE.sade_crmin": [0.0, 0.1, 0.2],
+    "SADE.sade_crmax": [0.7, 0.9, 1.0],
+    "SADE.sade_conv": [True, False],
+    "SADE.sade_tol": [1e-5, 1e-6, 1e-7],
+    "SADE.sade_stag": [100, 300, 500],
+}
+
 
 def build_sensitivity_parameters() -> dict[str, dict]:
     """Return the full catalogue of sensitivity-analyzable parameters.
 
-    Structure: ``{name: {"label": str, "kind": "int"|"float"|"choice"|"bool",
-    ...extra}}``.
+    Each entry includes parameter-specific default_values.
 
-    - Global params are always present.
-    - Algorithm params come from each registered algorithm's META,
-      namespaced as ``<ALGO>.<key>`` (e.g. ``"GA.ga_pc"``).
-    - Plugin algorithms' params are included automatically.
+    Plugin authors may define ``sensitivity_defaults`` in their
+    parameter metadata to override the generic fallback.
     """
     catalog: dict[str, dict] = {}
+
+    # Global parameters
     for name, info in _GLOBAL_PARAMS.items():
-        catalog[name] = dict(info)
+        entry_info = dict(info)
+        entry_info["default_values"] = list(
+            _GLOBAL_DEFAULT_VALUES[name]
+        )
+        catalog[name] = entry_info
+
+    # Algorithm parameters
     for short_id, entry in ALGORITHM_REGISTRY.items():
         meta = entry["meta"]
         algo_label = meta.get("display_name", short_id)
+
         for p in meta["params"]:
             param_key = f"{short_id}.{p['key']}"
+            kind = p["type"]
+
             entry_info: dict[str, Any] = {
                 "label": f"{algo_label}: {p['display_name']}",
-                "kind": p["type"],
+                "kind": kind,
                 "algorithm": short_id,
                 "param_key": p["key"],
             }
+
             for field in ("min", "max", "step", "choices"):
                 if field in p:
                     entry_info[field] = p[field]
+
+            # Default priority:
+            # 1. Explicit sensitivity defaults
+            # 2. Plugin-provided sensitivity_defaults
+            # 3. All available choices for choice parameters
+            # 4. Both Boolean values for bool parameters
+            # 5. Algorithm's declared default
+            defaults = _ALGORITHM_DEFAULT_VALUES.get(param_key)
+
+            if defaults is None:
+                defaults = p.get("sensitivity_defaults")
+
+            if defaults is None and kind == "choice":
+                defaults = p.get("choices", [])
+
+            if defaults is None and kind == "bool":
+                defaults = [True, False]
+
+            if defaults is None:
+                defaults = [p["default"]]
+
+            entry_info["default_values"] = list(defaults)
+
             catalog[param_key] = entry_info
+
     return catalog
 
 
@@ -150,29 +222,46 @@ build_sweep_parameters = build_sensitivity_parameters
 def parse_sensitivity_values(raw: str) -> list:
     """Parse a comma-separated values string.
 
-    Numbers become int/float; other tokens become strings (for choice
-    params).  A single layer of surrounding single or double quotes is
-    stripped.  Blank entries are dropped.  Order is preserved.
+    Numbers become int/float, Boolean tokens become bool,
+    and other tokens remain strings.
     """
     if not raw.strip():
         raise ValueError("values list is empty")
+
     tokens = [t.strip() for t in raw.split(",") if t.strip()]
+
     if not tokens:
         raise ValueError("values list is empty")
+
     out: list = []
+
     for t in tokens:
         if len(t) >= 2 and t[0] == t[-1] and t[0] in ("'", '"'):
             t = t[1:-1]
+
+        # Boolean values must be checked before numeric parsing.
+        lower = t.lower()
+
+        if lower == "true":
+            out.append(True)
+            continue
+
+        if lower == "false":
+            out.append(False)
+            continue
+
         try:
             out.append(int(t))
             continue
         except ValueError:
             pass
+
         try:
             out.append(float(t))
             continue
         except ValueError:
             out.append(t)
+
     return out
 
 

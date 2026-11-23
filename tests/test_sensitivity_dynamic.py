@@ -77,6 +77,101 @@ def test_catalogue_reflects_new_plugins():
     finally:
         ALGORITHM_REGISTRY.pop("TestDynamicAlgo", None)
 
+def test_catalogue_includes_parameter_specific_defaults():
+    c = build_sensitivity_parameters()
+
+    assert c["NS"]["default_values"] == [50, 100, 200]
+
+    assert c["GA.ga_pc"]["default_values"] == [
+        0.6, 0.8, 0.95
+    ]
+
+    assert c["GA.ga_sel"]["default_values"] == [
+        "tournament", "roulette"
+    ]
+
+    assert c["DE.de_strategy"]["default_values"] == [
+        "rand/1/bin",
+        "best/1/bin",
+        "current-to-best/1/bin",
+    ]
+
+    assert c["SADE.sade_conv"]["default_values"] == [
+        True, False
+    ]
+
+
+def test_catalogue_choice_defaults_are_valid():
+    c = build_sensitivity_parameters()
+
+    for key, info in c.items():
+        if info["kind"] == "choice":
+            assert info["default_values"]
+            assert set(info["default_values"]).issubset(
+                set(info["choices"])
+            )
+
+
+def test_catalogue_numeric_defaults_respect_bounds():
+    c = build_sensitivity_parameters()
+
+    for key, info in c.items():
+        if info["kind"] not in ("int", "float"):
+            continue
+
+        if "min" not in info or "max" not in info:
+            continue
+
+        for value in info["default_values"]:
+            assert info["min"] <= value <= info["max"], (
+                f"{key}: invalid default {value}"
+            )
+
+
+def test_plugin_sensitivity_defaults():
+    from wds_optimizer.algorithms.registry import register
+
+    fake_meta = {
+        "short_id": "TestDefaultsAlgo",
+        "display_name": "Test Defaults",
+        "category": "Custom",
+        "paper_faithful": False,
+        "description": "test",
+        "references": ["-"],
+        "params": [
+            {
+                "key": "lr",
+                "name": "lr",
+                "display_name": "Learning rate",
+                "type": "float",
+                "default": 0.1,
+                "min": 0.0,
+                "max": 1.0,
+                "step": 0.01,
+                "sensitivity_defaults": [0.1, 0.25, 0.5],
+                "maps_to": None,
+                "description": "test",
+            },
+        ],
+        "constraint_policy": "deb_prefers",
+        "api_version": 1,
+    }
+
+    register(
+        "TestDefaultsAlgo",
+        run=lambda *a, **k: None,
+        meta=fake_meta,
+    )
+
+    try:
+        c = build_sensitivity_parameters()
+
+        assert c["TestDefaultsAlgo.lr"]["default_values"] == [
+            0.1, 0.25, 0.5
+        ]
+    finally:
+        ALGORITHM_REGISTRY.pop("TestDefaultsAlgo", None)
+
 
 # ---------------------------------------------------------------------
 #  Legacy aliases
@@ -133,6 +228,31 @@ def test_parse_sweep_values_strips_only_matching_quotes():
 def test_parse_sweep_values_mixed_quoted_and_unquoted():
     vals = parse_sensitivity_values("'a', b, \"c\"")
     assert vals == ["a", "b", "c"]
+
+def test_parse_sweep_values_booleans():
+    assert parse_sensitivity_values("True, False") == [
+        True, False
+    ]
+
+
+def test_parse_sweep_values_booleans_case_insensitive():
+    assert parse_sensitivity_values("true, FALSE, True") == [
+        True, False, True
+    ]
+
+
+def test_parse_sweep_values_quoted_booleans():
+    assert parse_sensitivity_values("'True', 'False'") == [
+        True, False
+    ]
+
+
+def test_parse_sweep_values_mixed_types():
+    assert parse_sensitivity_values(
+        "0.5, True, tournament, 10, False"
+    ) == [
+        0.5, True, "tournament", 10, False
+    ]
 
 # ---------------------------------------------------------------------
 #  Applying sweep params
