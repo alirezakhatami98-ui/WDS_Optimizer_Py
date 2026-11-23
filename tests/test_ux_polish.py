@@ -294,3 +294,44 @@ def test_sensitivity_batch_selector_uses_session_state_only(app_source):
     assert 'key="sensitivity_batch_selector"' in source
     assert "index=len(batches) - 1" not in source
     assert "st.session_state.sensitivity_batch_selector = len(batches) - 1" in source
+
+def test_sensitivity_choice_parameters_use_multiselect(app_source):
+    import re
+
+    assert re.search(
+        r"st\.multiselect\s*\(\s*[\"']Values[\"']",
+        app_source,
+    )
+    assert 'choice_key = f"sen_choices_{rid}"' in app_source
+
+
+def test_sensitivity_numeric_parameters_keep_text_input(app_source):
+    assert 'row["values"] = st.text_input(' in app_source
+
+
+def test_sensitivity_parameter_change_resets_defaults(app_source):
+    assert "def _on_sensitivity_parameter_change(row_id):" in app_source
+    assert 'row["param"] = new_param' in app_source
+    assert 'row["values"] = ", ".join(map(str, defaults))' in app_source
+    assert "on_change=_on_sensitivity_parameter_change" in app_source
+
+
+def test_sensitivity_add_uses_catalog_defaults(app_source):
+    assert 'info = catalog[default_param]' in app_source
+    assert 'default_values = info["default_values"]' in app_source
+    assert 'default_vals = "0.5, 0.7, 0.9"' not in app_source
+
+
+def test_sensitivity_default_plan_uses_catalog(app_source):
+    import re
+
+    match = re.search(
+        r"^def _make_default_plan\(.*?(?=^def |\\Z)",
+        app_source,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert match is not None
+
+    source = match.group(0)
+    assert "build_sensitivity_parameters()" in source
+    assert 'info["default_values"]' in source

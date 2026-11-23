@@ -949,36 +949,50 @@ def _algorithm_params_from_sidebar(algorithms: list[str]) -> dict:
     return out
 
 def _make_default_plan(algos: list[str]) -> list[dict]:
-    """Default sensitivity plan for the given algorithms.
-
-    Each entry is {id, param, values, enabled}.  Keys are chosen
-    from the most impactful parameters per algorithm, with sensible
-    starting ranges from docs/parameters.md.
-    """
+    """Build the default sensitivity plan from the parameter catalog."""
     import uuid as _uuid
 
-    defaults = {
-        "GA.ga_pc": "0.6, 0.7, 0.8, 0.9",
-        "GA.ga_pm": "0.01, 0.03, 0.05, 0.1",
-        "GA.ga_sel": "tournament, roulette",
-        "PSO.pso_w": "0.5, 0.7, 0.9",
-        "PSO.pso_c1": "1.0, 1.5, 2.0",
-        "DE.de_f": "0.3, 0.5, 0.7",
-        "DE.de_cr": "0.3, 0.5, 0.9",
-        "DE.de_strategy": "rand/1/bin, best/1/bin",
-        "SADE.sade_stag": "100, 300, 500",
-        "SADE.sade_tol": "1e-5, 1e-6, 1e-7",
+    catalog = build_sensitivity_parameters()
+
+    preferred = {
+        "GA": [
+            "GA.ga_pc",
+            "GA.ga_pm",
+            "GA.ga_sel",
+        ],
+        "PSO": [
+            "PSO.pso_w",
+            "PSO.pso_c1",
+            "PSO.pso_c2",
+        ],
+        "DE": [
+            "DE.de_f",
+            "DE.de_cr",
+            "DE.de_strategy",
+        ],
+        "SADE": [
+            "SADE.sade_stag",
+            "SADE.sade_tol",
+        ],
     }
+
     rows = []
+
     for algo in algos:
-        for k, v in defaults.items():
-            if k.startswith(algo + "."):
-                rows.append({
-                    "id": _uuid.uuid4().hex,
-                    "param": k,
-                    "values": v,
-                    "enabled": True,
-                })
+        for param in preferred.get(algo, []):
+            info = catalog.get(param)
+            if info is None:
+                continue
+
+            values = info["default_values"]
+
+            rows.append({
+                "id": _uuid.uuid4().hex,
+                "param": param,
+                "values": ", ".join(map(str, values)),
+                "enabled": True,
+            })
+
     return rows
 
 def _catalog_for_algos(algos: list[str]) -> dict[str, dict]:
@@ -1054,8 +1068,38 @@ def _sensitivity_dialog():
             f"sen_en_{row_id}",
             f"sen_par_{row_id}",
             f"sen_val_{row_id}",
+            f"sen_choices_{row_id}",
         ):
             st.session_state.pop(k, None)
+    def _on_sensitivity_parameter_change(row_id):
+        """Reset a plan row to the new parameter's own defaults."""
+        par_key = f"sen_par_{row_id}"
+        new_param = st.session_state.get(par_key)
+
+        info = catalog.get(new_param)
+        if info is None:
+            return
+
+        for row in st.session_state.sensitivity_plan:
+            if row["id"] == row_id:
+                defaults = info["default_values"]
+                row["param"] = new_param
+                row["values"] = ", ".join(map(str, defaults))
+                break
+
+        # Remove the previous widget state before the new widget type
+        # is created on the next render.
+        st.session_state.pop(f"sen_val_{row_id}", None)
+        st.session_state.pop(f"sen_choices_{row_id}", None)
+
+        if info["kind"] in ("choice", "bool"):
+            st.session_state[f"sen_choices_{row_id}"] = list(
+                info["default_values"]
+            )
+        else:
+            st.session_state[f"sen_val_{row_id}"] = ", ".join(
+                map(str, info["default_values"])
+            )
     for row in st.session_state.sensitivity_plan:
         rid = row["id"]
         c1, c2, c3, c4 = st.columns([1, 3, 3, 1])
@@ -1121,6 +1165,8 @@ def _sensitivity_dialog():
                     key=par_key,
                     format_func=lambda k: catalog[k]["label"],
                     label_visibility="collapsed",
+                    on_change=_on_sensitivity_parameter_change,
+                    args=(rid,),
                 )
             else:
                 old_label = full_catalog.get(
@@ -1136,14 +1182,56 @@ def _sensitivity_dialog():
 
         # ---- Values ----
         with c3:
-            if val_key not in st.session_state:
-                st.session_state[val_key] = row["values"]
-            row["values"] = st.text_input(
-                "Values", key=val_key,
-                placeholder="e.g. 0.6, 0.7, 0.8, 0.9",
-                disabled=not row_is_valid,
-                label_visibility="collapsed",
-            )
+            info = catalog.get(row["param"], {})
+            kind = info.get("kind")
+
+            if kind in ("choice", "bool"):
+                choice_key = f"sen_choices_{rid}"
+                options = (
+                    info.get("choices", [])
+                    if kind == "choice"
+                    else [True, False]
+                )
+
+                if choice_key not in st.session_state:
+                    try:
+                        initial_values = parse_sensitivity_values(
+                            row["values"]
+                        )
+                        st.session_state[choice_key] = [
+                            value for value in initial_values
+                            if value in options
+                        ]
+                    except ValueError:
+                        st.session_state[choice_key] = list(
+                            info["default_values"]
+                        )
+
+                selected_values = st.multiselect(
+                    "Values",
+                    options=options,
+                    key=choice_key,
+                    format_func=lambda value: str(value),
+                    disabled=not row_is_valid,
+                    placeholder="Select one or more values",
+                    label_visibility="collapsed",
+                )
+
+                row["values"] = ", ".join(
+                    map(str, selected_values)
+                )
+
+            else:
+                if val_key not in st.session_state:
+                    st.session_state[val_key] = row["values"]
+
+                row["values"] = st.text_input(
+                    "Values",
+                    key=val_key,
+                    placeholder="e.g. 0.6, 0.7, 0.8",
+                    disabled=not row_is_valid,
+                    label_visibility="collapsed",
+                )
 
         # ---- Delete ----
         with c4:
@@ -1187,11 +1275,19 @@ def _sensitivity_dialog():
 
         new_id = _uuid.uuid4().hex
         default_param = available_params[0]
-        default_vals = "0.5, 0.7, 0.9"
+        info = catalog[default_param]
+        default_values = info["default_values"]
+        default_vals = ", ".join(map(str, default_values))
 
         st.session_state[f"sen_en_{new_id}"] = True
         st.session_state[f"sen_par_{new_id}"] = default_param
-        st.session_state[f"sen_val_{new_id}"] = default_vals
+
+        if info["kind"] in ("choice", "bool"):
+            st.session_state[f"sen_choices_{new_id}"] = list(
+                default_values
+            )
+        else:
+            st.session_state[f"sen_val_{new_id}"] = default_vals
 
         st.session_state.sensitivity_plan.append({
             "id": new_id,
