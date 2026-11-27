@@ -583,11 +583,11 @@ Only Evaluator may update them.
 
 ## 8. Hydraulic Execution and Failure Classification
 
-**Status: ACCEPTED in principle — exact EPANET classification OPEN**
+**Status: ACCEPTED — implementation pending verification**
 
 ### 8.1 Internal Hydraulic Result
 
-A private internal representation is proposed:
+The private internal hydraulic result is:
 
 ```python
 @dataclass(frozen=True)
@@ -595,60 +595,122 @@ class HydraulicResult:
     pressures: np.ndarray | None
     velocities: np.ndarray | None
     converged: bool
+    warnings: tuple[str, ...] = ()
 ```
 
-This object is not exposed to plugins.
+Rules:
 
-It may be extended with a private failure code if actual implementation requires it.
+- This object is private to the optimization engine.
+- It is not exposed through the public plugin API.
+- `warnings` contains diagnostic warning messages reported by the hydraulic backend.
+- Warnings do not automatically make a hydraulic result invalid.
+- Warning messages must be preserved when the hydraulic result is cached.
+- The arrays must be independent copies and must not expose mutable solver-owned data.
 
 ### 8.2 Three Hydraulic Outcomes
 
 **Outcome A — Successful hydraulic execution**
 
-- Solver completes successfully.
+- The hydraulic solver completes.
 - Pressure and velocity arrays are finite.
-- `converged=True`.
+- The result is considered converged.
+- Any reported warnings are preserved.
 - Raw hydraulic results may be cached.
 
 **Outcome B — Known hydraulic failure**
 
-- A verified hydraulic failure or nonconvergence occurs.
-- Public result uses the failure sentinel.
-- Failure may be cached because it is a valid outcome for that candidate.
+- A verified hydraulic nonconvergence or incomplete hydraulic result occurs.
+- The public Evaluator returns the standard failure sentinel.
+- The failure may be cached because it is a valid hydraulic outcome for that candidate.
 
 **Outcome C — Unexpected software or infrastructure exception**
 
-- Programming errors, invalid internal state, unexpected I/O failures, and unrelated infrastructure errors must propagate.
-- Such failures must not be converted into normal hydraulic nonconvergence.
+- Programming errors, invalid internal state, unexpected I/O failures, resource failures, and unrelated exceptions must propagate.
+- Such exceptions must not be converted into normal hydraulic nonconvergence.
 - They must not be cached as hydraulic results.
 
-### 8.3 Pressure and Numerical Validity
+### 8.3 EPANET Error Classification
+
+The following classification applies to the verified EPANET 2.2 error and warning codes used by the installed WNTR version.
+
+| EPANET code | Meaning | Evaluator behavior |
+|---:|---|---|
+| 1 | Hydraulic imbalance; convergence was not achieved within the allowed trials | Failure sentinel |
+| 2 | Hydraulic convergence required holding link statuses fixed | Preserve result and warning |
+| 3 | One or more positive-demand nodes are disconnected from all supply sources | Preserve result and warning; constraints determine feasibility |
+| 4 | One or more pumps cannot deliver the required flow or head | Preserve result and warning |
+| 5 | One or more flow control valves cannot deliver the required flow | Preserve result and warning |
+| 6 | Negative pressures occurred at one or more positive-demand junctions | Preserve result and warning; constraints determine feasibility |
+| 101 | Insufficient memory | Propagate exception |
+| 110 | Hydraulic equations cannot be solved | Failure sentinel |
+| Other codes | Unclassified or unrelated errors | Propagate exception unless explicitly verified and added to this contract |
+
+Important distinctions:
+
+- EPANET warning codes 2–6 do not independently invalidate a candidate.
+- A disconnected node, pump limitation, or valve limitation must not automatically turn the entire candidate into a hydraulic failure.
+- Negative pressure is not, by itself, a solver failure.
+- Constraint handling remains responsible for evaluating hydraulic constraint violations.
+- Code 1 is treated as hydraulic nonconvergence.
+- Code 110 is treated as a known hydraulic solver failure.
+- Memory errors and unrelated errors must not be silently converted into failure sentinels.
+
+### 8.4 Fast Solver Classification
+
+The Fast EPANET solver must:
+
+1. Execute `ENrunH()`.
+2. Capture the numeric error code immediately after the call, before any other Toolkit operation can overwrite it.
+3. Preserve reported warning messages.
+4. Classify the captured code according to Section 8.3.
+5. Read hydraulic results only when the solver outcome permits it.
+6. Validate that pressure and velocity arrays contain only finite values.
+
+The Fast solver must not clear warning information before it has been collected and attached to the hydraulic result.
+
+Known hydraulic failures return an unsuccessful internal hydraulic result.
+
+Unexpected exceptions propagate after appropriate resource cleanup and recovery.
+
+### 8.5 WNTR Simulator Classification
+
+The WNTR simulator path must use the following rules:
+
+- An `EpanetException` must not automatically be treated as hydraulic nonconvergence.
+- When handling an `EpanetException`, inspect the numeric error code available from the simulator's EPANET data object.
+- Error code 110 is a known hydraulic failure and maps to the failure sentinel.
+- Error code 101 and other unclassified errors propagate.
+- `ResultsStatus.error` indicates an incomplete hydraulic result and maps to the failure sentinel.
+- `ResultsStatus.converged` indicates that WNTR returned a complete result; the resulting pressure and velocity arrays must still pass finite-value validation.
+- Warning messages available through WNTR's `errcodelist` must be preserved in `HydraulicResult.warnings`.
+
+Important WNTR limitation:
+
+`errcodelist` contains warning messages, not their original numeric EPANET codes. Furthermore, the numeric `errcode` may be overwritten by subsequent Toolkit calls.
+
+Therefore:
+
+- The WNTR path must not claim that all numeric warning codes are available after `run_sim()` completes.
+- Warning text must be retained for diagnostics.
+- `ResultsStatus.error` must be used to identify incomplete binary results.
+- Numeric error classification must rely on the code captured while handling the relevant exception, not on a later potentially overwritten value.
+- Warning-message string matching must not be used as the primary error-classification mechanism.
+
+### 8.6 Pressure and Numerical Validity
 
 - Non-finite pressure or velocity arrays represent hydraulic failure.
-- Negative pressure alone is not a hydraulic solver failure.
-- Finite negative pressures must be passed to constraint evaluation.
+- Finite negative pressures are valid numerical outputs and must be passed to constraint evaluation.
 - Constraint handling determines their violation and feasibility.
+- A warning alone does not make an otherwise valid hydraulic result unsuccessful.
 
-### 8.4 EPANET Error Classification
+### 8.7 Exception and Cache Policy
 
-The implementation must distinguish actual hydraulic failures from warnings and unrelated EPANET errors.
-
-The exact classification of EPANET error codes and WNTR exception behavior must be verified against the project's installed WNTR/EPANET versions.
-
-Do not classify every `EpanetException` as a hydraulic failure.
-
-Do not use exception message string matching as the primary classification mechanism.
-
-### 8.5 Existing Implementation Issues to Resolve
-
-The legacy hydraulic implementation requires review:
-
-- `simulation.py` currently catches broad `Exception` and returns failure.
-- `fast_solver.py` currently catches `EpanetException` broadly.
-- Error-code information may be cleared before classification.
-- Fast solver initialization and validation currently use broad exception handling and may silently fall back to WNTR.
-
-These behaviors must be revised to preserve the distinction between hydraulic failures and unexpected errors.
+- Only verified hydraulic failures may be converted into the public failure sentinel.
+- Unexpected exceptions must propagate to the caller.
+- Unexpected exceptions must not be cached.
+- Known hydraulic failures may be cached within the current Run.
+- Hydraulic warning messages must remain attached to the cached hydraulic result.
+- Warning preservation must not change candidate feasibility or comparison behavior by itself.
 
 ---
 
@@ -679,11 +741,14 @@ It may store:
 - Raw pressure arrays.
 - Raw velocity arrays.
 - Hydraulic convergence status.
+- Hydraulic warning messages.
 - Other hydraulic-only data if implementation requires it.
 
 Cost is computed from design and cost data independently of hydraulic simulation.
 
 Violation and feasibility must be recomputed using the current constraint configuration.
+
+Warning messages are diagnostic information. They must be preserved across cache hits but must not independently affect feasibility or candidate comparison.
 
 ### 9.3 Cache Key
 
@@ -897,7 +962,7 @@ These results describe the last reported local test run and must be refreshed af
 
 - Evaluator API v2.
 - Per-run hydraulic cache.
-- Hydraulic result classification.
+- Hydraulic result classification and warning preservation.
 - Core integration.
 - Standard Runner integration.
 - Built-in algorithm migration.
@@ -926,7 +991,7 @@ The following topics must not be treated as finalized until explicitly resolved.
 
 | Topic | Status | Next action |
 |---|---|---|
-| Exact WNTR/EPANET hydraulic error classification | OPEN | Inspect installed-version behavior and error codes |
+| Exact WNTR/EPANET hydraulic error classification | ACCEPTED — implementation pending verification | Implement the approved classification and verify it with tests |
 | Fast solver fallback exception policy | OPEN | Distinguish compatibility failures from unexpected failures |
 | Plugin sandbox technology | OPEN | Evaluate realistic process and resource isolation |
 | Sandbox filesystem and network restrictions | OPEN | Define security boundary |
