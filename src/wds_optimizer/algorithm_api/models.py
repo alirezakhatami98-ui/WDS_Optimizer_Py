@@ -1,15 +1,123 @@
-
 """Public data models for Algorithm Plugin API v2."""
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from numbers import Integral
 from typing import Any
 
 import numpy as np
 
 
 INVALID_VIOLATION = 1e8
+
+
+@dataclass(frozen=True)
+class _FrozenMapping(Mapping[str, Any]):
+    """Small immutable and pickleable mapping."""
+
+    _items: tuple[tuple[str, Any], ...]
+
+    def __getitem__(self, key: str) -> Any:
+        for item_key, value in self._items:
+            if item_key == key:
+                return value
+
+        raise KeyError(key)
+
+    def __iter__(self):
+        return (key for key, _ in self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+
+@dataclass(frozen=True)
+class AlgorithmConfig:
+    """Immutable configuration provided to an API v2 algorithm."""
+
+    seed: int
+    population_size: int
+    max_generations: int
+    params: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name in ("seed", "population_size", "max_generations"):
+            value = getattr(self, name)
+
+            if isinstance(value, (bool, np.bool_)) or not isinstance(
+                value, Integral
+            ):
+                raise TypeError(f"{name} must be an integer.")
+
+            value = int(value)
+
+            if name == "seed":
+                if value < 0:
+                    raise ValueError("seed must be non-negative.")
+            elif value < 1:
+                raise ValueError(f"{name} must be positive.")
+
+            object.__setattr__(self, name, value)
+
+        if not isinstance(self.params, Mapping):
+            raise TypeError("params must be a mapping.")
+
+        normalized_params: dict[str, Any] = {}
+
+        reserved_names = {
+            "seed",
+            "population_size",
+            "max_generations",
+        }
+
+        for key, value in self.params.items():
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError(
+                    "Parameter keys must be non-empty strings."
+                )
+
+            key = key.strip()
+
+            if key in reserved_names:
+                raise ValueError(
+                    f"'{key}' is a reserved configuration field."
+                )
+
+            if key in normalized_params:
+                raise ValueError(
+                    f"Duplicate parameter key: '{key}'."
+                )
+
+            if isinstance(value, np.generic):
+                value = value.item()
+
+            if isinstance(value, bool):
+                pass
+            elif isinstance(value, int):
+                pass
+            elif isinstance(value, float):
+                if not math.isfinite(value):
+                    raise ValueError(
+                        f"Parameter '{key}' must be finite."
+                    )
+            elif isinstance(value, str):
+                pass
+            else:
+                raise TypeError(
+                    f"Parameter '{key}' must be a scalar "
+                    "string, boolean, integer, or float."
+                )
+
+            normalized_params[key] = value
+
+        object.__setattr__(
+            self,
+            "params",
+            _FrozenMapping(tuple(normalized_params.items())),
+        )
 
 
 def _readonly_array(
